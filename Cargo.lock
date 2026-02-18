@@ -163,6 +163,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "indicatif",
+ "libc",
  "minijinja",
  "security-framework",
  "serde",

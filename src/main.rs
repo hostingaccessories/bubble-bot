@@ -11,9 +11,15 @@ mod shell;
 mod templates;
 
 use anyhow::Result;
+use bollard::Docker;
 use clap::Parser;
+use tracing::info;
 
-use cli::Cli;
+use cli::{Cli, Command};
+use config::Config;
+use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
+use docker::images::ImageBuilder;
+use templates::{TemplateParams, TemplateRenderer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +27,76 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
+    let config = Config::load(&cli)?;
+    let command = cli.command();
+
+    match command {
+        Command::Shell => run_shell(&cli, &config).await,
+        _ => {
+            info!("subcommand not yet implemented");
+            Ok(())
+        }
+    }
+}
+
+async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
+
+    // Resolve container name
+    let container_name = config
+        .container
+        .name
+        .clone()
+        .unwrap_or_else(default_container_name);
+
+    // Resolve shell
+    let shell = config
+        .container
+        .shell
+        .clone()
+        .unwrap_or_else(|| "zsh".to_string());
+
+    // Render Dockerfile
+    let renderer = TemplateRenderer::new()?;
+    let params = TemplateParams::from_config(config);
+    let dockerfile = renderer.render(&params)?;
+
+    // Build or use cached image
+    let image_builder = ImageBuilder::new(docker.clone());
+    let build_result = image_builder.build(&dockerfile, cli.container.no_cache).await?;
+    info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
+
+    // Get project directory
+    let project_dir = std::env::current_dir()?
+        .to_string_lossy()
+        .to_string();
+
+    // Container lifecycle
+    let container_mgr = ContainerManager::new(docker);
+
+    // Clean up any existing container with the same name
+    container_mgr.cleanup_existing(&container_name).await?;
+
+    let opts = ContainerOpts {
+        image_tag: build_result.tag,
+        container_name: container_name.clone(),
+        shell: shell.clone(),
+        project_dir,
+    };
+
+    let container_id = container_mgr.create_and_start(&opts).await?;
+
+    // Launch interactive shell (blocking)
+    let exit_code = container_mgr.exec_interactive_shell(&container_id, &shell)?;
+
+    // Cleanup on shell exit
+    container_mgr.stop_and_remove(&container_id).await?;
+
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
 
     Ok(())
 }
