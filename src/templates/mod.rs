@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::runtime::Runtime;
 use crate::runtime::node::NodeRuntime;
 use crate::runtime::php::PhpRuntime;
+use crate::runtime::rust::RustRuntime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
 
@@ -62,6 +63,16 @@ impl<'a> TemplateRenderer<'a> {
             rt_env.add_template("node", node.template())?;
             let rt_tmpl = rt_env.get_template("node")?;
             let layer = rt_tmpl.render(context! { node_version => version })?;
+            rendered.push('\n');
+            rendered.push_str(&layer);
+        }
+
+        if params.rust_enabled {
+            let rust = RustRuntime::new();
+            let mut rt_env = Environment::new();
+            rt_env.add_template("rust", rust.template())?;
+            let rt_tmpl = rt_env.get_template("rust")?;
+            let layer = rt_tmpl.render(context! {})?;
             rendered.push('\n');
             rendered.push_str(&layer);
         }
@@ -353,5 +364,77 @@ mod tests {
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
         assert!(php_pos < node_pos, "PHP layer should come before Node layer");
+    }
+
+    #[test]
+    fn render_with_rust() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: true,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("FROM ubuntu:24.04"));
+        assert!(output.contains("rustup.rs"));
+        assert!(output.contains("CARGO_HOME"));
+        assert!(output.contains("RUSTUP_HOME"));
+        assert!(output.contains("/usr/local/cargo/bin"));
+    }
+
+    #[test]
+    fn render_without_rust_has_no_rust_layer() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(!output.contains("rustup"));
+        assert!(!output.contains("CARGO_HOME"));
+    }
+
+    #[test]
+    fn render_with_node_and_rust_ordering() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: Some("22".to_string()),
+            rust_enabled: true,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        // Both present
+        assert!(output.contains("nodesource"));
+        assert!(output.contains("rustup.rs"));
+
+        // Node comes before Rust (deterministic order: PHP, Node, Rust, Go)
+        let node_pos = output.find("nodesource").unwrap();
+        let rust_pos = output.find("rustup.rs").unwrap();
+        assert!(node_pos < rust_pos, "Node layer should come before Rust layer");
+    }
+
+    #[test]
+    fn render_with_php_node_and_rust_ordering() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: Some("8.3".to_string()),
+            node_version: Some("22".to_string()),
+            rust_enabled: true,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        let php_pos = output.find("php8.3-cli").unwrap();
+        let node_pos = output.find("nodesource").unwrap();
+        let rust_pos = output.find("rustup.rs").unwrap();
+        assert!(php_pos < node_pos, "PHP before Node");
+        assert!(node_pos < rust_pos, "Node before Rust");
     }
 }
