@@ -15,6 +15,7 @@ use bollard::Docker;
 use clap::Parser;
 use tracing::info;
 
+use auth::resolve_oauth_token;
 use cli::{Cli, Command};
 use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
@@ -72,6 +73,12 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
+    // Resolve auth token
+    let mut env_vars = Vec::new();
+    if let Some(token) = resolve_oauth_token()? {
+        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
+    }
+
     // Container lifecycle
     let container_mgr = ContainerManager::new(docker);
 
@@ -83,6 +90,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         container_name: container_name.clone(),
         shell: shell.clone(),
         project_dir,
+        env_vars,
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;

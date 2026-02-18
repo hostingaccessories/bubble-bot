@@ -21,6 +21,7 @@ pub struct ContainerOpts {
     pub container_name: String,
     pub shell: String,
     pub project_dir: String,
+    pub env_vars: Vec<String>,
 }
 
 impl ContainerManager {
@@ -88,12 +89,19 @@ impl ContainerManager {
             ..Default::default()
         };
 
+        let env = if opts.env_vars.is_empty() {
+            None
+        } else {
+            Some(opts.env_vars.clone())
+        };
+
         let config = Config {
             image: Some(opts.image_tag.clone()),
             cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
             user: Some(user),
             working_dir: Some("/workspace".to_string()),
             host_config: Some(host_config),
+            env,
             ..Default::default()
         };
 
