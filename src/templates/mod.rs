@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::runtime::Runtime;
 use crate::runtime::node::NodeRuntime;
 use crate::runtime::php::PhpRuntime;
+use crate::runtime::go::GoRuntime;
 use crate::runtime::rust::RustRuntime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
@@ -73,6 +74,16 @@ impl<'a> TemplateRenderer<'a> {
             rt_env.add_template("rust", rust.template())?;
             let rt_tmpl = rt_env.get_template("rust")?;
             let layer = rt_tmpl.render(context! {})?;
+            rendered.push('\n');
+            rendered.push_str(&layer);
+        }
+
+        if let Some(ref version) = params.go_version {
+            let go = GoRuntime::new(version)?;
+            let mut rt_env = Environment::new();
+            rt_env.add_template("go", go.template())?;
+            let rt_tmpl = rt_env.get_template("go")?;
+            let layer = rt_tmpl.render(context! { go_version => version })?;
             rendered.push('\n');
             rendered.push_str(&layer);
         }
@@ -436,5 +447,123 @@ mod tests {
         let rust_pos = output.find("rustup.rs").unwrap();
         assert!(php_pos < node_pos, "PHP before Node");
         assert!(node_pos < rust_pos, "Node before Rust");
+    }
+
+    #[test]
+    fn render_with_go_123() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: Some("1.23".to_string()),
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("FROM ubuntu:24.04"));
+        assert!(output.contains("go1.23.linux-${ARCH}"));
+        assert!(output.contains("go.dev"));
+        assert!(output.contains("/usr/local/go/bin"));
+        assert!(output.contains("uname -m"));
+    }
+
+    #[test]
+    fn render_with_go_122() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: Some("1.22".to_string()),
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("go1.22.linux-${ARCH}"));
+        assert!(!output.contains("go1.23"));
+    }
+
+    #[test]
+    fn render_without_go_has_no_go_layer() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(!output.contains("go.dev"));
+        assert!(!output.contains("GOPATH"));
+    }
+
+    #[test]
+    fn render_go_unsupported_version_errors() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: Some("1.21".to_string()),
+        };
+        let result = renderer.render(&params);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_go_architecture_aware() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: Some("1.23".to_string()),
+        };
+        let output = renderer.render(&params).unwrap();
+
+        // Verify architecture detection is in the template
+        assert!(output.contains("uname -m"));
+        assert!(output.contains("amd64"));
+        assert!(output.contains("arm64"));
+    }
+
+    #[test]
+    fn render_with_rust_and_go_ordering() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: true,
+            go_version: Some("1.23".to_string()),
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("rustup.rs"));
+        assert!(output.contains("go.dev"));
+
+        // Rust comes before Go (deterministic order: PHP, Node, Rust, Go)
+        let rust_pos = output.find("rustup.rs").unwrap();
+        let go_pos = output.find("go.dev").unwrap();
+        assert!(rust_pos < go_pos, "Rust layer should come before Go layer");
+    }
+
+    #[test]
+    fn render_with_all_runtimes_ordering() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: Some("8.3".to_string()),
+            node_version: Some("22".to_string()),
+            rust_enabled: true,
+            go_version: Some("1.23".to_string()),
+        };
+        let output = renderer.render(&params).unwrap();
+
+        let php_pos = output.find("php8.3-cli").unwrap();
+        let node_pos = output.find("nodesource").unwrap();
+        let rust_pos = output.find("rustup.rs").unwrap();
+        let go_pos = output.find("go.dev").unwrap();
+        assert!(php_pos < node_pos, "PHP before Node");
+        assert!(node_pos < rust_pos, "Node before Rust");
+        assert!(rust_pos < go_pos, "Rust before Go");
     }
 }
