@@ -3,6 +3,7 @@ use minijinja::{Environment, context};
 
 use crate::config::Config;
 use crate::runtime::Runtime;
+use crate::runtime::node::NodeRuntime;
 use crate::runtime::php::PhpRuntime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
@@ -51,6 +52,16 @@ impl<'a> TemplateRenderer<'a> {
             rt_env.add_template("php", php.template())?;
             let rt_tmpl = rt_env.get_template("php")?;
             let layer = rt_tmpl.render(context! { php_version => version })?;
+            rendered.push('\n');
+            rendered.push_str(&layer);
+        }
+
+        if let Some(ref version) = params.node_version {
+            let node = NodeRuntime::new(version)?;
+            let mut rt_env = Environment::new();
+            rt_env.add_template("node", node.template())?;
+            let rt_tmpl = rt_env.get_template("node")?;
+            let layer = rt_tmpl.render(context! { node_version => version })?;
             rendered.push('\n');
             rendered.push_str(&layer);
         }
@@ -243,5 +254,104 @@ mod tests {
         };
         let result = renderer.render(&params);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_with_node_22() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: Some("22".to_string()),
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("FROM ubuntu:24.04"));
+        assert!(output.contains("nodesource"));
+        assert!(output.contains("setup_22.x"));
+        assert!(output.contains("nodejs"));
+    }
+
+    #[test]
+    fn render_with_node_18() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: Some("18".to_string()),
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("setup_18.x"));
+        assert!(!output.contains("setup_22.x"));
+    }
+
+    #[test]
+    fn render_with_node_20() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: Some("20".to_string()),
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(output.contains("setup_20.x"));
+    }
+
+    #[test]
+    fn render_without_node_has_no_node_layer() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: None,
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        assert!(!output.contains("nodesource"));
+        assert!(!output.contains("nodejs"));
+    }
+
+    #[test]
+    fn render_node_unsupported_version_errors() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: None,
+            node_version: Some("16".to_string()),
+            rust_enabled: false,
+            go_version: None,
+        };
+        let result = renderer.render(&params);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_with_php_and_node() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let params = TemplateParams {
+            php_version: Some("8.3".to_string()),
+            node_version: Some("22".to_string()),
+            rust_enabled: false,
+            go_version: None,
+        };
+        let output = renderer.render(&params).unwrap();
+
+        // Base present
+        assert!(output.contains("FROM ubuntu:24.04"));
+        // PHP layer present
+        assert!(output.contains("php8.3-cli"));
+        // Node layer present
+        assert!(output.contains("setup_22.x"));
+        assert!(output.contains("nodejs"));
+
+        // PHP comes before Node (deterministic order)
+        let php_pos = output.find("php8.3-cli").unwrap();
+        let node_pos = output.find("nodesource").unwrap();
+        assert!(php_pos < node_pos, "PHP layer should come before Node layer");
     }
 }
