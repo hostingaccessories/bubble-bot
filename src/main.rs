@@ -19,7 +19,7 @@ use cli::{Cli, Command};
 use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
-use templates::{TemplateParams, TemplateRenderer};
+use templates::TemplateRenderer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,8 +60,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
-    let params = TemplateParams::from_config(config);
-    let dockerfile = renderer.render(&params)?;
+    let dockerfile = renderer.render(config)?;
 
     // Build or use cached image
     let image_builder = ImageBuilder::new(docker.clone());

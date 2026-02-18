@@ -1,3 +1,5 @@
+use minijinja::{context, value::Value};
+
 use super::Runtime;
 
 /// Supported Go versions.
@@ -30,6 +32,10 @@ impl Runtime for GoRuntime {
 
     fn template(&self) -> &str {
         include_str!("../templates/go.dockerfile")
+    }
+
+    fn template_context(&self) -> Value {
+        context! { go_version => &self.version }
     }
 }
 

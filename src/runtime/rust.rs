@@ -1,3 +1,5 @@
+use minijinja::{context, value::Value};
+
 use super::Runtime;
 
 #[derive(Debug)]
@@ -16,6 +18,10 @@ impl Runtime for RustRuntime {
 
     fn template(&self) -> &str {
         include_str!("../templates/rust.dockerfile")
+    }
+
+    fn template_context(&self) -> Value {
+        context! {}
     }
 }
 

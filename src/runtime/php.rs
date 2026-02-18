@@ -1,3 +1,5 @@
+use minijinja::{context, value::Value};
+
 use super::Runtime;
 
 /// Supported PHP versions.
@@ -30,6 +32,10 @@ impl Runtime for PhpRuntime {
 
     fn template(&self) -> &str {
         include_str!("../templates/php.dockerfile")
+    }
+
+    fn template_context(&self) -> Value {
+        context! { php_version => &self.version }
     }
 }
 

@@ -2,11 +2,7 @@ use anyhow::Result;
 use minijinja::{Environment, context};
 
 use crate::config::Config;
-use crate::runtime::Runtime;
-use crate::runtime::node::NodeRuntime;
-use crate::runtime::php::PhpRuntime;
-use crate::runtime::go::GoRuntime;
-use crate::runtime::rust::RustRuntime;
+use crate::runtime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
 
@@ -41,49 +37,20 @@ impl<'a> TemplateRenderer<'a> {
         Ok(Self { env })
     }
 
-    /// Renders the full Dockerfile by composing the base template with any
-    /// runtime templates based on the provided parameters.
-    pub fn render(&self, params: &TemplateParams) -> Result<String> {
+    /// Renders the full Dockerfile by composing the base template with runtime
+    /// layers discovered from the runtime registry.
+    pub fn render(&self, config: &Config) -> Result<String> {
         let tmpl = self.env.get_template("base")?;
         let mut rendered = tmpl.render(context! {})?;
 
-        // Compose runtime layers in deterministic order: PHP, Node, Rust, Go
-        if let Some(ref version) = params.php_version {
-            let php = PhpRuntime::new(version)?;
-            let mut rt_env = Environment::new();
-            rt_env.add_template("php", php.template())?;
-            let rt_tmpl = rt_env.get_template("php")?;
-            let layer = rt_tmpl.render(context! { php_version => version })?;
-            rendered.push('\n');
-            rendered.push_str(&layer);
-        }
+        // Collect runtimes via the registry (deterministic order: PHP, Node, Rust, Go)
+        let runtimes = runtime::collect_runtimes(config)?;
 
-        if let Some(ref version) = params.node_version {
-            let node = NodeRuntime::new(version)?;
+        for rt in &runtimes {
             let mut rt_env = Environment::new();
-            rt_env.add_template("node", node.template())?;
-            let rt_tmpl = rt_env.get_template("node")?;
-            let layer = rt_tmpl.render(context! { node_version => version })?;
-            rendered.push('\n');
-            rendered.push_str(&layer);
-        }
-
-        if params.rust_enabled {
-            let rust = RustRuntime::new();
-            let mut rt_env = Environment::new();
-            rt_env.add_template("rust", rust.template())?;
-            let rt_tmpl = rt_env.get_template("rust")?;
-            let layer = rt_tmpl.render(context! {})?;
-            rendered.push('\n');
-            rendered.push_str(&layer);
-        }
-
-        if let Some(ref version) = params.go_version {
-            let go = GoRuntime::new(version)?;
-            let mut rt_env = Environment::new();
-            rt_env.add_template("go", go.template())?;
-            let rt_tmpl = rt_env.get_template("go")?;
-            let layer = rt_tmpl.render(context! { go_version => version })?;
+            rt_env.add_template(rt.name(), rt.template())?;
+            let rt_tmpl = rt_env.get_template(rt.name())?;
+            let layer = rt_tmpl.render(rt.template_context())?;
             rendered.push('\n');
             rendered.push_str(&layer);
         }
@@ -96,16 +63,27 @@ impl<'a> TemplateRenderer<'a> {
 mod tests {
     use super::*;
 
+    fn config_with_runtimes(
+        php: Option<&str>,
+        node: Option<&str>,
+        rust: bool,
+        go: Option<&str>,
+    ) -> Config {
+        let mut config = Config::default();
+        config.runtimes.php = php.map(String::from);
+        config.runtimes.node = node.map(String::from);
+        if rust {
+            config.runtimes.rust = Some(true);
+        }
+        config.runtimes.go = go.map(String::from);
+        config
+    }
+
     #[test]
     fn render_base_template() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("git"));
@@ -122,28 +100,18 @@ mod tests {
     #[test]
     fn render_is_deterministic() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: Some("22".to_string()),
-            rust_enabled: true,
-            go_version: Some("1.23".to_string()),
-        };
+        let config = config_with_runtimes(Some("8.3"), Some("22"), true, Some("1.23"));
 
-        let output1 = renderer.render(&params).unwrap();
-        let output2 = renderer.render(&params).unwrap();
+        let output1 = renderer.render(&config).unwrap();
+        let output2 = renderer.render(&config).unwrap();
         assert_eq!(output1, output2);
     }
 
     #[test]
     fn base_template_uses_ubuntu_2404() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
         let first_line = output.lines().next().unwrap();
         assert_eq!(first_line, "FROM ubuntu:24.04");
     }
@@ -160,11 +128,7 @@ mod tests {
 
     #[test]
     fn params_from_config_with_runtimes() {
-        let mut config = Config::default();
-        config.runtimes.php = Some("8.3".to_string());
-        config.runtimes.node = Some("22".to_string());
-        config.runtimes.rust = Some(true);
-        config.runtimes.go = Some("1.23".to_string());
+        let config = config_with_runtimes(Some("8.3"), Some("22"), true, Some("1.23"));
 
         let params = TemplateParams::from_config(&config);
         assert_eq!(params.php_version.as_deref(), Some("8.3"));
@@ -176,17 +140,10 @@ mod tests {
     #[test]
     fn render_with_php_83() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.3"), None, false, None);
+        let output = renderer.render(&config).unwrap();
 
-        // Base template still present
         assert!(output.contains("FROM ubuntu:24.04"));
-        // PHP layer appended
         assert!(output.contains("php8.3-cli"));
         assert!(output.contains("php8.3-mbstring"));
         assert!(output.contains("php8.3-xml"));
@@ -208,13 +165,8 @@ mod tests {
     #[test]
     fn render_with_php_81() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.1".to_string()),
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.1"), None, false, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("php8.1-cli"));
         assert!(output.contains("php8.1-mbstring"));
@@ -224,13 +176,8 @@ mod tests {
     #[test]
     fn render_with_php_82() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.2".to_string()),
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.2"), None, false, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("php8.2-cli"));
         assert!(output.contains("php8.2-redis"));
@@ -239,13 +186,8 @@ mod tests {
     #[test]
     fn render_without_php_has_no_php_layer() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
 
         assert!(!output.contains("php"));
         assert!(!output.contains("composer"));
@@ -254,40 +196,25 @@ mod tests {
     #[test]
     fn render_php_is_deterministic() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output1 = renderer.render(&params).unwrap();
-        let output2 = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.3"), None, false, None);
+        let output1 = renderer.render(&config).unwrap();
+        let output2 = renderer.render(&config).unwrap();
         assert_eq!(output1, output2);
     }
 
     #[test]
     fn render_php_unsupported_version_errors() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("7.4".to_string()),
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let result = renderer.render(&params);
+        let config = config_with_runtimes(Some("7.4"), None, false, None);
+        let result = renderer.render(&config);
         assert!(result.is_err());
     }
 
     #[test]
     fn render_with_node_22() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: Some("22".to_string()),
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, Some("22"), false, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("nodesource"));
@@ -298,13 +225,8 @@ mod tests {
     #[test]
     fn render_with_node_18() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: Some("18".to_string()),
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, Some("18"), false, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("setup_18.x"));
         assert!(!output.contains("setup_22.x"));
@@ -313,13 +235,8 @@ mod tests {
     #[test]
     fn render_with_node_20() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: Some("20".to_string()),
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, Some("20"), false, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("setup_20.x"));
     }
@@ -327,13 +244,8 @@ mod tests {
     #[test]
     fn render_without_node_has_no_node_layer() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
 
         assert!(!output.contains("nodesource"));
         assert!(!output.contains("nodejs"));
@@ -342,36 +254,22 @@ mod tests {
     #[test]
     fn render_node_unsupported_version_errors() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: Some("16".to_string()),
-            rust_enabled: false,
-            go_version: None,
-        };
-        let result = renderer.render(&params);
+        let config = config_with_runtimes(None, Some("16"), false, None);
+        let result = renderer.render(&config);
         assert!(result.is_err());
     }
 
     #[test]
     fn render_with_php_and_node() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: Some("22".to_string()),
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.3"), Some("22"), false, None);
+        let output = renderer.render(&config).unwrap();
 
-        // Base present
         assert!(output.contains("FROM ubuntu:24.04"));
-        // PHP layer present
         assert!(output.contains("php8.3-cli"));
-        // Node layer present
         assert!(output.contains("setup_22.x"));
         assert!(output.contains("nodejs"));
 
-        // PHP comes before Node (deterministic order)
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
         assert!(php_pos < node_pos, "PHP layer should come before Node layer");
@@ -380,13 +278,8 @@ mod tests {
     #[test]
     fn render_with_rust() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: true,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, None, true, None);
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("rustup.rs"));
@@ -398,13 +291,8 @@ mod tests {
     #[test]
     fn render_without_rust_has_no_rust_layer() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
 
         assert!(!output.contains("rustup"));
         assert!(!output.contains("CARGO_HOME"));
@@ -413,19 +301,12 @@ mod tests {
     #[test]
     fn render_with_node_and_rust_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: Some("22".to_string()),
-            rust_enabled: true,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, Some("22"), true, None);
+        let output = renderer.render(&config).unwrap();
 
-        // Both present
         assert!(output.contains("nodesource"));
         assert!(output.contains("rustup.rs"));
 
-        // Node comes before Rust (deterministic order: PHP, Node, Rust, Go)
         let node_pos = output.find("nodesource").unwrap();
         let rust_pos = output.find("rustup.rs").unwrap();
         assert!(node_pos < rust_pos, "Node layer should come before Rust layer");
@@ -434,13 +315,8 @@ mod tests {
     #[test]
     fn render_with_php_node_and_rust_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: Some("22".to_string()),
-            rust_enabled: true,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.3"), Some("22"), true, None);
+        let output = renderer.render(&config).unwrap();
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
@@ -452,13 +328,8 @@ mod tests {
     #[test]
     fn render_with_go_123() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: Some("1.23".to_string()),
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, None, false, Some("1.23"));
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("go1.23.linux-${ARCH}"));
@@ -470,13 +341,8 @@ mod tests {
     #[test]
     fn render_with_go_122() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: Some("1.22".to_string()),
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, None, false, Some("1.22"));
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("go1.22.linux-${ARCH}"));
         assert!(!output.contains("go1.23"));
@@ -485,13 +351,8 @@ mod tests {
     #[test]
     fn render_without_go_has_no_go_layer() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: None,
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = Config::default();
+        let output = renderer.render(&config).unwrap();
 
         assert!(!output.contains("go.dev"));
         assert!(!output.contains("GOPATH"));
@@ -500,28 +361,17 @@ mod tests {
     #[test]
     fn render_go_unsupported_version_errors() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: Some("1.21".to_string()),
-        };
-        let result = renderer.render(&params);
+        let config = config_with_runtimes(None, None, false, Some("1.21"));
+        let result = renderer.render(&config);
         assert!(result.is_err());
     }
 
     #[test]
     fn render_go_architecture_aware() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: false,
-            go_version: Some("1.23".to_string()),
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, None, false, Some("1.23"));
+        let output = renderer.render(&config).unwrap();
 
-        // Verify architecture detection is in the template
         assert!(output.contains("uname -m"));
         assert!(output.contains("amd64"));
         assert!(output.contains("arm64"));
@@ -530,18 +380,12 @@ mod tests {
     #[test]
     fn render_with_rust_and_go_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: None,
-            node_version: None,
-            rust_enabled: true,
-            go_version: Some("1.23".to_string()),
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(None, None, true, Some("1.23"));
+        let output = renderer.render(&config).unwrap();
 
         assert!(output.contains("rustup.rs"));
         assert!(output.contains("go.dev"));
 
-        // Rust comes before Go (deterministic order: PHP, Node, Rust, Go)
         let rust_pos = output.find("rustup.rs").unwrap();
         let go_pos = output.find("go.dev").unwrap();
         assert!(rust_pos < go_pos, "Rust layer should come before Go layer");
@@ -550,13 +394,8 @@ mod tests {
     #[test]
     fn render_with_all_runtimes_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
-        let params = TemplateParams {
-            php_version: Some("8.3".to_string()),
-            node_version: Some("22".to_string()),
-            rust_enabled: true,
-            go_version: Some("1.23".to_string()),
-        };
-        let output = renderer.render(&params).unwrap();
+        let config = config_with_runtimes(Some("8.3"), Some("22"), true, Some("1.23"));
+        let output = renderer.render(&config).unwrap();
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
@@ -565,5 +404,27 @@ mod tests {
         assert!(php_pos < node_pos, "PHP before Node");
         assert!(node_pos < rust_pos, "Node before Rust");
         assert!(rust_pos < go_pos, "Rust before Go");
+    }
+
+    #[test]
+    fn content_hash_changes_with_runtime_addition() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config1 = config_with_runtimes(Some("8.3"), None, false, None);
+        let config2 = config_with_runtimes(Some("8.3"), Some("22"), false, None);
+
+        let output1 = renderer.render(&config1).unwrap();
+        let output2 = renderer.render(&config2).unwrap();
+        assert_ne!(output1, output2, "Adding a runtime should change the Dockerfile");
+    }
+
+    #[test]
+    fn content_hash_changes_with_version_change() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config1 = config_with_runtimes(Some("8.2"), None, false, None);
+        let config2 = config_with_runtimes(Some("8.3"), None, false, None);
+
+        let output1 = renderer.render(&config1).unwrap();
+        let output2 = renderer.render(&config2).unwrap();
+        assert_ne!(output1, output2, "Changing a version should change the Dockerfile");
     }
 }

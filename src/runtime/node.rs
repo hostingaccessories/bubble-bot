@@ -1,3 +1,5 @@
+use minijinja::{context, value::Value};
+
 use super::Runtime;
 
 /// Supported Node.js versions.
@@ -30,6 +32,10 @@ impl Runtime for NodeRuntime {
 
     fn template(&self) -> &str {
         include_str!("../templates/node.dockerfile")
+    }
+
+    fn template_context(&self) -> Value {
+        context! { node_version => &self.version }
     }
 }
 
