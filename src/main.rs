@@ -21,6 +21,7 @@ use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
+use hooks::HookRunner;
 use services::{Service, collect_service_env_vars, collect_services};
 use templates::TemplateRenderer;
 
@@ -156,6 +157,10 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Run post_start hooks
+    let hook_runner = HookRunner::new(&container_id, &config.hooks);
+    hook_runner.run_post_start();
+
     // Build Chief command
     let mut cmd: Vec<&str> = vec!["chief"];
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -163,6 +168,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Launch Chief (blocking)
     let exit_code = container_mgr.exec_interactive_command(&container_id, &cmd)?;
+
+    // Run pre_stop hooks
+    hook_runner.run_pre_stop();
 
     // Cleanup on exit
     container_mgr.stop_and_remove(&container_id).await?;
@@ -247,6 +255,10 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Run post_start hooks
+    let hook_runner = HookRunner::new(&container_id, &config.hooks);
+    hook_runner.run_post_start();
+
     // Build Claude Code command
     let mut cmd: Vec<&str> = vec!["claude", "--permission-mode", "bypassPermissions"];
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -254,6 +266,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Launch Claude Code (blocking)
     let exit_code = container_mgr.exec_interactive_command(&container_id, &cmd)?;
+
+    // Run pre_stop hooks
+    hook_runner.run_pre_stop();
 
     // Cleanup on exit
     container_mgr.stop_and_remove(&container_id).await?;
@@ -345,8 +360,15 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Run post_start hooks
+    let hook_runner = HookRunner::new(&container_id, &config.hooks);
+    hook_runner.run_post_start();
+
     // Launch interactive shell (blocking)
     let exit_code = container_mgr.exec_interactive_shell(&container_id, &shell)?;
+
+    // Run pre_stop hooks
+    hook_runner.run_pre_stop();
 
     // Cleanup on shell exit
     container_mgr.stop_and_remove(&container_id).await?;
