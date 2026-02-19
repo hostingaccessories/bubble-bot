@@ -20,6 +20,7 @@ use cli::{Cli, Command};
 use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
+use docker::networks::{NetworkManager, default_network_name};
 use templates::TemplateRenderer;
 
 #[tokio::main]
@@ -46,12 +47,17 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     let docker = Docker::connect_with_local_defaults()
         .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
 
-    // Resolve container name
+    // Resolve container and network names
     let container_name = config
         .container
         .name
         .clone()
         .unwrap_or_else(default_container_name);
+    let network_name = config
+        .container
+        .network
+        .clone()
+        .unwrap_or_else(default_network_name);
 
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
@@ -79,6 +85,10 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
     }
 
+    // Create bridge network
+    let network_mgr = NetworkManager::new(docker.clone());
+    network_mgr.ensure_network(&network_name).await?;
+
     // Container lifecycle
     let container_mgr = ContainerManager::new(docker);
 
@@ -91,6 +101,7 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         shell: "zsh".to_string(),
         project_dir,
         env_vars,
+        network: Some(network_name.clone()),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
@@ -105,6 +116,7 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Cleanup on exit
     container_mgr.stop_and_remove(&container_id).await?;
+    network_mgr.remove_network(&network_name).await?;
 
     if exit_code != 0 {
         std::process::exit(exit_code);
@@ -117,12 +129,17 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     let docker = Docker::connect_with_local_defaults()
         .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
 
-    // Resolve container name
+    // Resolve container and network names
     let container_name = config
         .container
         .name
         .clone()
         .unwrap_or_else(default_container_name);
+    let network_name = config
+        .container
+        .network
+        .clone()
+        .unwrap_or_else(default_network_name);
 
     // Resolve shell
     let shell = config
@@ -157,6 +174,10 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
     }
 
+    // Create bridge network
+    let network_mgr = NetworkManager::new(docker.clone());
+    network_mgr.ensure_network(&network_name).await?;
+
     // Container lifecycle
     let container_mgr = ContainerManager::new(docker);
 
@@ -169,6 +190,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         shell: shell.clone(),
         project_dir,
         env_vars,
+        network: Some(network_name.clone()),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
@@ -178,6 +200,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     // Cleanup on shell exit
     container_mgr.stop_and_remove(&container_id).await?;
+    network_mgr.remove_network(&network_name).await?;
 
     if exit_code != 0 {
         std::process::exit(exit_code);

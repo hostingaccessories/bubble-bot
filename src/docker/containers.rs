@@ -4,10 +4,10 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    StopContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, NetworkingConfig,
+    RemoveContainerOptions, StopContainerOptions,
 };
-use bollard::models::HostConfig;
+use bollard::models::{EndpointSettings, HostConfig};
 use tracing::{info, warn};
 
 /// Manages the lifecycle of the dev container: create, start, exec, stop, remove.
@@ -22,6 +22,7 @@ pub struct ContainerOpts {
     pub shell: String,
     pub project_dir: String,
     pub env_vars: Vec<String>,
+    pub network: Option<String>,
 }
 
 impl ContainerManager {
@@ -86,6 +87,7 @@ impl ContainerManager {
 
         let host_config = HostConfig {
             binds: Some(vec![bind]),
+            network_mode: opts.network.clone(),
             ..Default::default()
         };
 
@@ -95,6 +97,17 @@ impl ContainerManager {
             Some(opts.env_vars.clone())
         };
 
+        // Attach to network with container name as alias for hostname-based discovery
+        let networking_config = opts.network.as_ref().map(|net| {
+            let endpoint = EndpointSettings {
+                aliases: Some(vec![opts.container_name.clone()]),
+                ..Default::default()
+            };
+            let mut endpoints_config = HashMap::new();
+            endpoints_config.insert(net.clone(), endpoint);
+            NetworkingConfig { endpoints_config }
+        });
+
         let config = Config {
             image: Some(opts.image_tag.clone()),
             cmd: Some(vec!["sleep".to_string(), "infinity".to_string()]),
@@ -102,6 +115,7 @@ impl ContainerManager {
             working_dir: Some("/workspace".to_string()),
             host_config: Some(host_config),
             env,
+            networking_config,
             ..Default::default()
         };
 

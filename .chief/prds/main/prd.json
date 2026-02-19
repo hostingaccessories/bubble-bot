@@ -227,7 +227,8 @@
         "Env var fallback works if `CLAUDE_CODE_OAUTH_TOKEN` is already set in the host environment"
       ],
       "priority": 14,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-015",
@@ -241,7 +242,8 @@
         "Service containers are reachable by their service name as hostname (e.g., `mysql`, `redis`)"
       ],
       "priority": 15,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-016",

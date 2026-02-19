@@ -39,6 +39,12 @@
 - `TemplateRenderer::render()` returns `RenderResult { dockerfile, context_files }` — callers must use `.dockerfile` for the Dockerfile string
 - `ImageBuilder::build(dockerfile, context_files, no_cache)` — pass `&render_result.context_files` for extra build context files
 - `ContextFile { path, content, mode }` in `templates` module represents extra files in the Docker build context
+- `ContainerManager::exec_interactive_command(id, &[&str])` runs arbitrary commands via `docker exec -it` — reusable for `claude`, `chief`, and `exec` subcommands
+- Network management: `NetworkManager::new(docker)` → `ensure_network(name)` → (use containers) → `remove_network(name)`
+- `default_network_name()` returns same format as `default_container_name()` — `bubble-boy-<project-dir>`
+- `ContainerOpts.network: Option<String>` — when set, container joins the network via `HostConfig.network_mode` + `NetworkingConfig` with alias
+- bollard has two `NetworkingConfig` types: use `bollard::container::NetworkingConfig` (generic `<T>`) for container creation, NOT `bollard::models::NetworkingConfig`
+- Docker name filter for networks also returns partial matches — filter for exact name match in results
 
 ---
 
@@ -238,4 +244,32 @@
   - Entrypoint uses `$HOME` env var which respects the UID mapping set by `ENV HOME=/home/dev` in the base template
   - `exec "$@"` in entrypoint passes through to the container's CMD (sleep infinity)
   - All 99 tests pass (15 CLI + 18 config + 37 templates + 7 images + 2 containers + 3 PHP + 3 Node + 2 Rust + 3 Go + 6 registry + 2 keychain + 2 auth), clippy clean, build clean
+---
+
+## 2026-02-18 - US-014
+- What was implemented: Claude Code subcommand — `bubble-boy claude` starts a container and runs `claude --permission-mode bypassPermissions` with trailing args support; auth token injected via entrypoint flow (US-012 + US-013); container cleanup on exit; env var fallback supported
+- Files changed:
+  - `src/main.rs` — Added `run_claude()` function wired to `Command::Claude { args }` match arm; follows same lifecycle pattern as `run_shell()` but executes Claude Code command instead of interactive shell
+  - `src/docker/containers.rs` — Added `exec_interactive_command()` method to `ContainerManager` for running arbitrary commands via `docker exec -it` (reusable for future `chief` and `exec` subcommands)
+- **Learnings for future iterations:**
+  - `exec_interactive_command()` takes `&[&str]` for flexible command building — trailing args from CLI are converted to `&str` refs before extending the base command vec
+  - The `run_claude` function doesn't need shell resolution (no `--shell` flag relevance) — hardcodes "zsh" in ContainerOpts since the shell field is only used for the container's initial setup
+  - `exec_interactive_command()` is generic enough to reuse for `chief` (US-020) and `exec` (US-029) subcommands
+  - Auth token injection works identically to shell subcommand — `resolve_oauth_token()` + entrypoint script handles the credential flow
+  - All 99 tests pass (no new tests needed — core logic reuses existing tested components), clippy clean, build clean
+---
+
+## 2026-02-18 - US-015
+- What was implemented: Bridge network management — `NetworkManager` creates/reuses/removes bridge networks named `bubble-boy-<project-dir>`; dev container attached to network via `HostConfig.network_mode` and `NetworkingConfig` with alias; network created before container, removed during cleanup; stale networks reused
+- Files changed:
+  - `src/docker/networks.rs` — Complete rewrite: `NetworkManager` struct with `ensure_network()`, `network_exists()`, `remove_network()`; `default_network_name()` helper; 3 unit tests
+  - `src/docker/containers.rs` — Added `network: Option<String>` to `ContainerOpts`; `create_and_start()` now sets `HostConfig.network_mode` and `NetworkingConfig` with endpoint alias when network provided; imports updated for `NetworkingConfig` from `bollard::container`
+  - `src/main.rs` — Both `run_shell()` and `run_claude()` now create bridge network before container, pass network in `ContainerOpts`, and remove network during cleanup; added `NetworkManager` and `default_network_name` imports
+- **Learnings for future iterations:**
+  - bollard has TWO `NetworkingConfig` types: `bollard::container::NetworkingConfig<T>` (generic, for container creation) and `bollard::models::NetworkingConfig` (from bollard-stubs). Use the container module version.
+  - `NetworkingConfig.endpoints_config` is `HashMap<T, EndpointSettings>` (NOT `Option<HashMap>`) — build with `HashMap::new()` + `insert()`, not `into_iter().collect()`
+  - Docker network name filter returns partial matches — must compare `n.name.as_deref() == Some(name)` for exact match
+  - `HostConfig.network_mode` + `NetworkingConfig` with alias is the correct way to attach a container to a network at creation time
+  - Service containers (future stories) will also use `NetworkManager::ensure_network()` and the same network name, making them reachable by hostname
+  - All 102 tests pass (99 existing + 3 new network tests), clippy clean, build clean
 ---
