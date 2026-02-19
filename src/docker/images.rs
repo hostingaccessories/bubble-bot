@@ -127,8 +127,16 @@ impl ImageBuilder {
                     }
                 }
                 Err(e) => {
-                    pb.finish_with_message(format!("Build failed: {e}"));
-                    anyhow::bail!("Docker build stream error: {e}");
+                    let detail = if let bollard::errors::Error::DockerStreamError {
+                        error,
+                    } = &e
+                    {
+                        error.clone()
+                    } else {
+                        format!("{e}")
+                    };
+                    pb.finish_with_message(format!("Build failed: {detail}"));
+                    anyhow::bail!("Docker build error: {detail}");
                 }
             }
         }

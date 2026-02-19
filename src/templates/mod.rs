@@ -580,7 +580,7 @@ mod tests {
         let output = &result.dockerfile;
 
         assert!(output.contains("MiniCodeMonkey/chief/releases"));
-        assert!(output.contains("TARGETARCH"));
+        assert!(output.contains("uname -m"));
         assert!(output.contains("/usr/local/bin/chief"));
     }
 
