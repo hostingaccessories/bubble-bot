@@ -21,10 +21,7 @@ use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
-use services::Service;
-use services::mysql::MysqlService;
-use services::postgres::PostgresService;
-use services::redis::RedisService;
+use services::{Service, collect_service_env_vars, collect_services};
 use templates::TemplateRenderer;
 
 #[tokio::main]
@@ -53,32 +50,6 @@ fn project_name() -> String {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "project".to_string())
-}
-
-/// Collects service containers to start based on the resolved config.
-fn collect_services(config: &Config) -> Vec<Box<dyn Service>> {
-    let project = project_name();
-    let mut services: Vec<Box<dyn Service>> = Vec::new();
-
-    if let Some(ref mysql_config) = config.services.mysql {
-        services.push(Box::new(MysqlService::new(
-            mysql_config.clone(),
-            project.clone(),
-        )));
-    }
-
-    if config.services.redis == Some(true) {
-        services.push(Box::new(RedisService::new(project.clone())));
-    }
-
-    if let Some(ref postgres_config) = config.services.postgres {
-        services.push(Box::new(PostgresService::new(
-            postgres_config.clone(),
-            project.clone(),
-        )));
-    }
-
-    services
 }
 
 /// Starts all configured service containers on the given network.
@@ -156,10 +127,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     }
 
     // Collect service env vars for the dev container
-    let services = collect_services(config);
-    for service in &services {
-        env_vars.extend(service.dev_env());
-    }
+    let project = project_name();
+    let services = collect_services(config, &project);
+    env_vars.extend(collect_service_env_vars(&services));
 
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
@@ -255,10 +225,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     }
 
     // Collect service env vars for the dev container
-    let services = collect_services(config);
-    for service in &services {
-        env_vars.extend(service.dev_env());
-    }
+    let project = project_name();
+    let services = collect_services(config, &project);
+    env_vars.extend(collect_service_env_vars(&services));
 
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
