@@ -1,0 +1,448 @@
+{
+  "project": "Bubble Boy",
+  "description": "Bubble Boy is a Rust 2024 CLI that replaces bash-based `lcars claude:container*` scripts. It spins up ephemeral Docker containers with the current project mounted, drops the user into a shell (or runs Claude Code / Chief), and tears everything down on exit. The primary motivator is running Chief (autonomous Claude Code task runner) safely in container isolation since Chief uses `--dangerously-skip-permissions`. The tool uses the bollard crate for Docker API management, generates Dockerfiles at runtime from embedded templates, and supports multiple language runtimes and service containers (MySQL, Redis, PostgreSQL).",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Project Scaffolding",
+      "description": "As a developer, I want a properly structured Rust 2024 project so that I have a foundation to build on.",
+      "acceptanceCriteria": [
+        "`Cargo.toml` uses `edition = \"2024\"` and `rust-version = \"1.85\"`",
+        "All dependencies from the plan are declared (clap, tokio, bollard, serde, toml, minijinja, sha2, anyhow, thiserror, tracing, tracing-subscriber, indicatif, dirs, tempfile, which, serde_json)",
+        "`security-framework` dependency is conditional on macOS target (`[target.'cfg(target_os = \"macos\")'.dependencies]`)",
+        "Crate structure matches the plan: `src/main.rs`, `src/cli.rs`, `src/config.rs`, `src/docker/`, `src/runtime/`, `src/services/`, `src/auth/`, `src/hooks.rs`, `src/shell.rs`, `src/templates/`",
+        "Module files exist with placeholder contents (empty structs/traits as needed)",
+        "`cargo build` compiles cleanly",
+        "`cargo clippy` passes with no warnings"
+      ],
+      "priority": 1,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-002",
+      "title": "CLI Parsing",
+      "description": "As a user, I want a well-structured CLI with subcommands and flags so that I can control container behavior from the command line.",
+      "acceptanceCriteria": [
+        "clap derive structs in `src/cli.rs` define all subcommands: `shell` (default), `claude`, `chief`, `exec`, `build`, `config`, `clean`",
+        "Runtime flags parsed: `--with-php \u003cVER\u003e`, `--with-node \u003cVER\u003e`, `--with-rust`, `--with-go \u003cVER\u003e`",
+        "Service flags parsed: `--with-mysql [VER]`, `--with-redis`, `--with-postgres [VER]`",
+        "Container flags parsed: `--network \u003cNAME\u003e`, `--name \u003cNAME\u003e`, `--shell \u003cSHELL\u003e`, `--no-cache`, `--dry-run`",
+        "`claude` and `chief` subcommands accept trailing args via `-- args`",
+        "`exec` subcommand requires `-- \u003ccmd\u003e` trailing args",
+        "`clean` subcommand accepts `--volumes` flag",
+        "`bubble-boy --help` displays usage for all subcommands and flags",
+        "Running `bubble-boy` with no subcommand defaults to `shell`"
+      ],
+      "priority": 2,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-003",
+      "title": "Config Loading and Merging",
+      "description": "As a user, I want project-level and global configuration files so that I don't have to pass flags every time.",
+      "acceptanceCriteria": [
+        "`src/config.rs` defines serde-compatible structs for `.bubble-boy.toml` (runtimes, services, hooks, shell sections)",
+        "Global config loaded from `~/.config/bubble-boy/config.toml` (using `dirs` crate for XDG path)",
+        "Project config loaded from `.bubble-boy.toml` in current directory",
+        "Config resolution order: defaults -\u003e global config -\u003e project config -\u003e CLI flags",
+        "Missing config files are silently skipped (not an error)",
+        "Service config supports version, database, username, password fields",
+        "Hook config supports `post_start` and `pre_stop` string arrays",
+        "Shell config supports `mount_configs` boolean",
+        "Unit tests verify merge precedence"
+      ],
+      "priority": 3,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-004",
+      "title": "Dockerfile Template Rendering (Base Layer)",
+      "description": "As a developer, I want a base Dockerfile template rendered at runtime so that containers have common tools pre-installed.",
+      "acceptanceCriteria": [
+        "`src/templates/base.dockerfile` embedded in binary via `include_str!` or minijinja environment",
+        "Base template uses Ubuntu 24.04 as the base image",
+        "Base template installs common tools: git, curl, wget, unzip, build-essential, ca-certificates",
+        "Base template creates `/home/dev` with `chmod 777` for arbitrary UID support",
+        "Base template sets `/workspace` as the working directory",
+        "`src/templates/mod.rs` renders templates using minijinja with runtime/service parameters",
+        "Rendered Dockerfile output is deterministic given the same inputs"
+      ],
+      "priority": 4,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-005",
+      "title": "Image Building with Content-Hash Caching",
+      "description": "As a user, I want images to only rebuild when the Dockerfile changes so that startup is fast after the first run.",
+      "acceptanceCriteria": [
+        "Rendered Dockerfile is SHA-256 hashed (first 12 chars)",
+        "Image tagged as `bubble-boy:\u003chash-prefix-12\u003e`",
+        "Before building, check if image with that tag already exists via bollard API",
+        "Skip build if image exists (log message indicating cache hit)",
+        "Build image via bollard `build_image` API when cache misses",
+        "`--no-cache` flag forces rebuild regardless of hash match",
+        "Build uses a temp directory for the Docker build context (via `tempfile` crate)",
+        "Progress output shown during builds via tracing or indicatif"
+      ],
+      "priority": 5,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-006",
+      "title": "Container Lifecycle (Create, Start, Exec, Stop, Remove)",
+      "description": "As a user, I want `bubble-boy` to create a container with my project mounted and drop me into a shell so that I can work inside it.",
+      "acceptanceCriteria": [
+        "Container created via bollard with: `--user $(id -u):$(id -g)`, `-v $PWD:/workspace`, `cmd: sleep infinity`",
+        "Container started in detached mode",
+        "Interactive shell launched via `Command::new(\"docker\").args([\"exec\", \"-it\", container_id, shell])` with inherited stdio (blocking call)",
+        "Shell defaults to `zsh`, overridable via `--shell` flag",
+        "On shell exit (Command returns), container is stopped and removed via bollard",
+        "Container name defaults to `bubble-boy-\u003cproject-dir-name\u003e` unless overridden with `--name`",
+        "Existing container with the same name is detected and cleaned up before starting"
+      ],
+      "priority": 6,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-007",
+      "title": "PHP Runtime Template",
+      "description": "As a PHP developer, I want to specify a PHP version so that the container has PHP and its extensions pre-installed.",
+      "acceptanceCriteria": [
+        "`src/templates/php.dockerfile` template installs PHP via PPA",
+        "Supports versions 8.1, 8.2, 8.3 (parameterized)",
+        "Installs the same fixed extension set as the lcars Dockerfile (covers Laravel/PHP)",
+        "Installs Composer",
+        "Template composes correctly with the base template",
+        "`--with-php 8.3` produces a working image with `php -v` returning 8.3.x",
+        "`src/runtime/php.rs` implements the runtime module"
+      ],
+      "priority": 7,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-008",
+      "title": "Node.js Runtime Template",
+      "description": "As a Node.js developer, I want to specify a Node version so that the container has Node.js and npm pre-installed.",
+      "acceptanceCriteria": [
+        "`src/templates/node.dockerfile` template installs Node.js via nodesource",
+        "Supports versions 18, 20, 22 (parameterized)",
+        "Template composes correctly with the base template and other runtimes",
+        "`--with-node 22` produces a working image with `node -v` returning v22.x",
+        "`src/runtime/node.rs` implements the runtime module"
+      ],
+      "priority": 8,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-009",
+      "title": "Rust Runtime Template",
+      "description": "As a Rust developer, I want to include the Rust toolchain in the container.",
+      "acceptanceCriteria": [
+        "`src/templates/rust.dockerfile` template installs Rust stable via rustup",
+        "`--with-rust` produces a working image with `rustc --version` available",
+        "Cargo is in the PATH",
+        "`src/runtime/rust.rs` implements the runtime module"
+      ],
+      "priority": 9,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-010",
+      "title": "Go Runtime Template",
+      "description": "As a Go developer, I want to specify a Go version so that the container has Go pre-installed.",
+      "acceptanceCriteria": [
+        "`src/templates/go.dockerfile` template installs Go (version-parameterized)",
+        "Supports versions 1.22, 1.23",
+        "Architecture-aware download (detects arm64 vs amd64 via `uname -m` at build time)",
+        "`--with-go 1.23` produces a working image with `go version` returning 1.23.x",
+        "`src/runtime/go.rs` implements the runtime module"
+      ],
+      "priority": 10,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-011",
+      "title": "Multi-Runtime Template Composition",
+      "description": "As a developer, I want to combine multiple runtimes in a single image so that full-stack projects work.",
+      "acceptanceCriteria": [
+        "Multiple `--with-*` flags compose into a single Dockerfile (base + all requested runtimes)",
+        "Runtime templates are appended in a deterministic order",
+        "`--with-php 8.3 --with-node 22` builds one image with both PHP and Node available",
+        "Content hash reflects the full composed Dockerfile (changes to any runtime invalidate cache)",
+        "Runtime registry in `src/runtime/mod.rs` handles discovery and ordering"
+      ],
+      "priority": 11,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-012",
+      "title": "macOS Keychain Auth Extraction",
+      "description": "As a macOS user, I want Bubble Boy to extract my Claude Code OAuth token from the macOS Keychain so that Claude authenticates automatically inside the container.",
+      "acceptanceCriteria": [
+        "`src/auth/keychain.rs` uses `security-framework` crate to read `Claude Code-credentials` from the Keychain",
+        "Extracted token passed to container as `-e CLAUDE_CODE_OAUTH_TOKEN=...`",
+        "Only compiled on macOS (`#[cfg(target_os = \"macos\")]`)",
+        "Graceful fallback if Keychain item not found (warning, not error)",
+        "`src/auth/mod.rs` dispatches to keychain or env strategy based on platform/availability"
+      ],
+      "priority": 12,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-013",
+      "title": "Entrypoint Credential Injection",
+      "description": "As a user, I want the OAuth token to be written to the correct file inside the container and the env var unset so that credentials aren't exposed via `docker inspect`.",
+      "acceptanceCriteria": [
+        "`src/templates/entrypoint.sh` embedded template ported from lcars entrypoint",
+        "Script writes `CLAUDE_CODE_OAUTH_TOKEN` to `~/.claude/.credentials.json` inside the container",
+        "Script unsets the env var after writing the file",
+        "Entrypoint script included in the generated Dockerfile",
+        "Works with the host UID/GID mapping (`--user`)"
+      ],
+      "priority": 13,
+      "passes": true,
+      "inProgress": false
+    },
+    {
+      "id": "US-014",
+      "title": "Claude Code Subcommand",
+      "description": "As a user, I want `bubble-boy claude` to run Claude Code with bypassed permissions inside the container so that I can use Claude safely.",
+      "acceptanceCriteria": [
+        "`bubble-boy claude` starts a container and runs `claude --permission-mode bypassPermissions` instead of a shell",
+        "Trailing args after `--` are passed to Claude Code",
+        "Auth token is injected via the entrypoint flow (US-012 + US-013)",
+        "Container cleanup happens after Claude Code exits",
+        "Env var fallback works if `CLAUDE_CODE_OAUTH_TOKEN` is already set in the host environment"
+      ],
+      "priority": 14,
+      "passes": false
+    },
+    {
+      "id": "US-015",
+      "title": "Bridge Network Management",
+      "description": "As a user, I want service containers and the dev container on an isolated network so that they can communicate by hostname.",
+      "acceptanceCriteria": [
+        "`src/docker/networks.rs` creates a bridge network named `bubble-boy-\u003cproject-dir-name\u003e`",
+        "Dev container and all service containers are attached to this network",
+        "Network is removed during cleanup (after all containers stopped)",
+        "If network already exists (stale from crash), it is reused or recreated",
+        "Service containers are reachable by their service name as hostname (e.g., `mysql`, `redis`)"
+      ],
+      "priority": 15,
+      "passes": false
+    },
+    {
+      "id": "US-016",
+      "title": "MySQL Service Container",
+      "description": "As a developer, I want `--with-mysql` to start a MySQL container so that my app can connect to a database.",
+      "acceptanceCriteria": [
+        "`src/services/mysql.rs` implements the service trait",
+        "Starts MySQL container (default version 8.0, overridable)",
+        "Uses a named volume for data persistence (`bubble-boy-\u003cproject\u003e-mysql-data`)",
+        "Readiness probe via `docker exec mysqladmin ping` retry loop",
+        "Injects env vars into dev container: `DB_HOST=mysql`, `DB_PORT=3306`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`",
+        "Config values for database, username, password from `.bubble-boy.toml` `[services.mysql]`",
+        "Container stopped and removed on cleanup; named volume preserved"
+      ],
+      "priority": 16,
+      "passes": false
+    },
+    {
+      "id": "US-017",
+      "title": "Redis Service Container",
+      "description": "As a developer, I want `--with-redis` to start a Redis container.",
+      "acceptanceCriteria": [
+        "`src/services/redis.rs` implements the service trait",
+        "Starts Redis container (default `alpine` tag)",
+        "Readiness probe via `redis-cli ping`",
+        "Injects env vars: `REDIS_HOST=redis`, `REDIS_PORT=6379`",
+        "Container stopped and removed on cleanup"
+      ],
+      "priority": 17,
+      "passes": false
+    },
+    {
+      "id": "US-018",
+      "title": "PostgreSQL Service Container",
+      "description": "As a developer, I want `--with-postgres` to start a PostgreSQL container.",
+      "acceptanceCriteria": [
+        "`src/services/postgres.rs` implements the service trait",
+        "Starts PostgreSQL container (version parameterized)",
+        "Uses a named volume for data persistence",
+        "Readiness probe via `pg_isready`",
+        "Injects env vars: `DB_HOST=postgres`, `DB_PORT=5432`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`",
+        "Config values from `.bubble-boy.toml` `[services.postgres]`"
+      ],
+      "priority": 18,
+      "passes": false
+    },
+    {
+      "id": "US-019",
+      "title": "Service Env Injection into Dev Container",
+      "description": "As a developer, I want service connection details automatically available as environment variables in the dev container so that my app can connect without manual configuration.",
+      "acceptanceCriteria": [
+        "All active service containers contribute env vars to the dev container at creation time",
+        "Env vars follow a consistent naming convention (`DB_HOST`, `REDIS_HOST`, etc.)",
+        "Multiple services can be active simultaneously without conflicts",
+        "Service trait in `src/services/mod.rs` defines a method for env var contribution"
+      ],
+      "priority": 19,
+      "passes": false
+    },
+    {
+      "id": "US-020",
+      "title": "Chief Subcommand",
+      "description": "As a user, I want `bubble-boy chief` to run Chief autonomously inside a container so that I can run task automation safely.",
+      "acceptanceCriteria": [
+        "`bubble-boy chief` starts a container and runs Chief",
+        "Trailing args after `--` are passed to Chief",
+        "Chief is installed in the Dockerfile template when the `chief` subcommand is used",
+        "Auth token is injected (same flow as `claude` subcommand)",
+        "Container cleanup happens after Chief exits"
+      ],
+      "priority": 20,
+      "passes": false
+    },
+    {
+      "id": "US-021",
+      "title": "Hook Execution",
+      "description": "As a user, I want `post_start` and `pre_stop` hooks from my config to run automatically so that I can set up and tear down my dev environment.",
+      "acceptanceCriteria": [
+        "`src/hooks.rs` reads `post_start` and `pre_stop` arrays from resolved config",
+        "`post_start` hooks run via bollard exec API after container start, before interactive session",
+        "`pre_stop` hooks run via bollard exec API after interactive session, before container stop",
+        "Each hook command runs sequentially",
+        "Hook failure is logged but does not prevent container cleanup",
+        "Hook output is streamed to the user's terminal"
+      ],
+      "priority": 21,
+      "passes": false
+    },
+    {
+      "id": "US-022",
+      "title": "Shell Detection and Dotfile Mounting",
+      "description": "As a user, I want my shell config files mounted read-only in the container so that I have my familiar shell environment.",
+      "acceptanceCriteria": [
+        "`src/shell.rs` detects the user's shell from `$SHELL` env var",
+        "When `mount_configs = true` in config, mounts host dotfiles (`.zshrc`, `.bashrc`, `.aliases`, etc.) as read-only bind mounts to `/home/dev/`",
+        "Only mounts files that exist on the host",
+        "Default shell selection: use detected shell, fallback to bash"
+      ],
+      "priority": 22,
+      "passes": false
+    },
+    {
+      "id": "US-023",
+      "title": "Config Subcommand",
+      "description": "As a user, I want `bubble-boy config` to show the resolved configuration so that I can debug config issues.",
+      "acceptanceCriteria": [
+        "`bubble-boy config` prints the fully resolved config (after all merge layers) as TOML",
+        "Output shows which values came from which source (defaults, global, project, CLI) or at minimum the final resolved values",
+        "No container is started for this subcommand"
+      ],
+      "priority": 23,
+      "passes": false
+    },
+    {
+      "id": "US-024",
+      "title": "Clean Subcommand",
+      "description": "As a user, I want `bubble-boy clean` to remove images and networks so that I can reclaim disk space.",
+      "acceptanceCriteria": [
+        "`bubble-boy clean` removes all `bubble-boy:*` images",
+        "Removes any `bubble-boy-*` networks",
+        "Named volumes preserved by default",
+        "`--volumes` flag additionally removes `bubble-boy-*` named volumes",
+        "Lists what was removed"
+      ],
+      "priority": 24,
+      "passes": false
+    },
+    {
+      "id": "US-025",
+      "title": "Dry Run Mode",
+      "description": "As a user, I want `--dry-run` to show what would be executed without actually running anything so that I can verify my configuration.",
+      "acceptanceCriteria": [
+        "`--dry-run` prints the resolved config, generated Dockerfile, and Docker commands that would be run",
+        "No containers, networks, or images are created",
+        "Works with all subcommands"
+      ],
+      "priority": 25,
+      "passes": false
+    },
+    {
+      "id": "US-026",
+      "title": "Signal Handling for Clean Shutdown",
+      "description": "As a user, I want Ctrl+C to cleanly stop and remove all containers so that I don't leave orphaned containers.",
+      "acceptanceCriteria": [
+        "SIGINT and SIGTERM are caught via tokio signal handlers",
+        "On signal, all running containers (dev + services) are stopped and removed",
+        "Network is removed",
+        "Named volumes are preserved",
+        "No orphaned containers left after any exit path (normal exit, Ctrl+C, crash recovery on next run)"
+      ],
+      "priority": 26,
+      "passes": false
+    },
+    {
+      "id": "US-027",
+      "title": "Stale Container Detection",
+      "description": "As a user, I want Bubble Boy to detect and clean up stale containers from crashed sessions so that I don't have to manually manage Docker.",
+      "acceptanceCriteria": [
+        "On startup, check for existing `bubble-boy-\u003cproject\u003e` containers",
+        "If found and not from the current session, offer to remove them (or auto-remove with a warning)",
+        "Check for stale `bubble-boy-\u003cproject\u003e` networks and clean up"
+      ],
+      "priority": 27,
+      "passes": false
+    },
+    {
+      "id": "US-028",
+      "title": "Progress Bars for Image Builds",
+      "description": "As a user, I want visual feedback during image builds so that I know the build is progressing.",
+      "acceptanceCriteria": [
+        "`indicatif` progress bars or spinners shown during image build",
+        "Build layer output streamed during `--no-cache` or first builds",
+        "Clear indication when build completes or image is loaded from cache"
+      ],
+      "priority": 28,
+      "passes": false
+    },
+    {
+      "id": "US-029",
+      "title": "Exec Subcommand",
+      "description": "As a user, I want `bubble-boy exec -- \u003ccmd\u003e` to run an arbitrary command in the container so that I can script container usage.",
+      "acceptanceCriteria": [
+        "`bubble-boy exec -- \u003ccmd\u003e` starts a container, runs the command, and cleans up",
+        "Exit code from the command is propagated as Bubble Boy's exit code",
+        "Command runs with the same mounts, env, and network as the `shell` subcommand",
+        "Non-interactive (no TTY allocation unless the command needs it)"
+      ],
+      "priority": 29,
+      "passes": false
+    },
+    {
+      "id": "US-030",
+      "title": "Build Subcommand",
+      "description": "As a user, I want `bubble-boy build` to force-rebuild the image so that I can update the base without changing config.",
+      "acceptanceCriteria": [
+        "`bubble-boy build` renders the Dockerfile and builds the image regardless of cache",
+        "No container is started",
+        "Reports the resulting image tag"
+      ],
+      "priority": 30,
+      "passes": false
+    }
+  ]
+}

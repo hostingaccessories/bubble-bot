@@ -4,6 +4,8 @@ use bollard::image::{BuildImageOptions, ListImagesOptions};
 use sha2::{Digest, Sha256};
 use tracing::info;
 
+use crate::templates::ContextFile;
+
 /// Builds Docker images with content-hash caching.
 ///
 /// The rendered Dockerfile is SHA-256 hashed (first 12 chars) and used as the
@@ -59,10 +61,12 @@ impl ImageBuilder {
     /// result if the image already exists.
     ///
     /// - `dockerfile_content`: the fully rendered Dockerfile string
+    /// - `context_files`: additional files to include in the build context
     /// - `no_cache`: if true, forces a rebuild even if the image tag exists
     pub async fn build(
         &self,
         dockerfile_content: &str,
+        context_files: &[ContextFile],
         no_cache: bool,
     ) -> Result<BuildResult> {
         let tag = Self::compute_tag(dockerfile_content);
@@ -78,8 +82,8 @@ impl ImageBuilder {
 
         info!(tag = %tag, "building image");
 
-        // Create a tar archive with the Dockerfile in a temp directory
-        let tar_bytes = Self::create_build_context(dockerfile_content)?;
+        // Create a tar archive with the Dockerfile and context files
+        let tar_bytes = Self::create_build_context(dockerfile_content, context_files)?;
 
         let options = BuildImageOptions {
             t: tag.clone(),
@@ -123,8 +127,12 @@ impl ImageBuilder {
         })
     }
 
-    /// Creates an in-memory tar archive containing the Dockerfile.
-    fn create_build_context(dockerfile_content: &str) -> Result<Vec<u8>> {
+    /// Creates an in-memory tar archive containing the Dockerfile and any
+    /// additional context files (e.g., entrypoint.sh).
+    fn create_build_context(
+        dockerfile_content: &str,
+        context_files: &[ContextFile],
+    ) -> Result<Vec<u8>> {
         let mut archive = tar::Builder::new(Vec::new());
 
         let dockerfile_bytes = dockerfile_content.as_bytes();
@@ -135,6 +143,17 @@ impl ImageBuilder {
         header.set_cksum();
 
         archive.append(&header, dockerfile_bytes)?;
+
+        for file in context_files {
+            let bytes = file.content.as_bytes();
+            let mut file_header = tar::Header::new_gnu();
+            file_header.set_path(&file.path)?;
+            file_header.set_size(bytes.len() as u64);
+            file_header.set_mode(file.mode);
+            file_header.set_cksum();
+            archive.append(&file_header, bytes)?;
+        }
+
         archive.finish()?;
 
         Ok(archive.into_inner()?)
@@ -173,7 +192,7 @@ mod tests {
     #[test]
     fn create_build_context_produces_valid_tar() {
         let content = "FROM ubuntu:24.04\nRUN echo hello\n";
-        let tar_bytes = ImageBuilder::create_build_context(content).unwrap();
+        let tar_bytes = ImageBuilder::create_build_context(content, &[]).unwrap();
 
         // Verify the tar contains a Dockerfile entry
         let mut archive = tar::Archive::new(tar_bytes.as_slice());
@@ -192,12 +211,51 @@ mod tests {
         use std::io::Read;
 
         let content = "FROM ubuntu:24.04\nRUN echo hello\n";
-        let tar_bytes = ImageBuilder::create_build_context(content).unwrap();
+        let tar_bytes = ImageBuilder::create_build_context(content, &[]).unwrap();
 
         let mut archive = tar::Archive::new(tar_bytes.as_slice());
         let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
         let mut buf = String::new();
         entry.read_to_string(&mut buf).unwrap();
         assert_eq!(buf, content);
+    }
+
+    #[test]
+    fn create_build_context_includes_extra_files() {
+        let content = "FROM ubuntu:24.04\n";
+        let context_files = vec![ContextFile {
+            path: "entrypoint.sh".to_string(),
+            content: "#!/bin/bash\nexec \"$@\"\n".to_string(),
+            mode: 0o755,
+        }];
+        let tar_bytes = ImageBuilder::create_build_context(content, &context_files).unwrap();
+
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        let entries: Vec<_> = archive.entries().unwrap().collect();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn create_build_context_extra_file_content_matches() {
+        use std::io::Read;
+
+        let content = "FROM ubuntu:24.04\n";
+        let script = "#!/bin/bash\nexec \"$@\"\n";
+        let context_files = vec![ContextFile {
+            path: "entrypoint.sh".to_string(),
+            content: script.to_string(),
+            mode: 0o755,
+        }];
+        let tar_bytes = ImageBuilder::create_build_context(content, &context_files).unwrap();
+
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        let mut entries = archive.entries().unwrap();
+        // Skip Dockerfile
+        entries.next();
+        let mut entry = entries.next().unwrap().unwrap();
+        assert_eq!(entry.path().unwrap().to_str().unwrap(), "entrypoint.sh");
+        let mut buf = String::new();
+        entry.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, script);
     }
 }

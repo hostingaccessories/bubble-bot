@@ -61,11 +61,17 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
-    let dockerfile = renderer.render(config)?;
+    let render_result = renderer.render(config)?;
 
     // Build or use cached image
     let image_builder = ImageBuilder::new(docker.clone());
-    let build_result = image_builder.build(&dockerfile, cli.container.no_cache).await?;
+    let build_result = image_builder
+        .build(
+            &render_result.dockerfile,
+            &render_result.context_files,
+            cli.container.no_cache,
+        )
+        .await?;
     info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
 
     // Get project directory

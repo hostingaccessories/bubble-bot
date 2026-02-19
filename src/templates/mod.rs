@@ -5,6 +5,23 @@ use crate::config::Config;
 use crate::runtime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
+static ENTRYPOINT_SCRIPT: &str = include_str!("entrypoint.sh");
+
+/// The result of rendering templates, containing the Dockerfile and any extra
+/// files that must be included in the Docker build context.
+#[derive(Debug, Clone)]
+pub struct RenderResult {
+    pub dockerfile: String,
+    pub context_files: Vec<ContextFile>,
+}
+
+/// An extra file to include in the Docker build context alongside the Dockerfile.
+#[derive(Debug, Clone)]
+pub struct ContextFile {
+    pub path: String,
+    pub content: String,
+    pub mode: u32,
+}
 
 /// Parameters extracted from config for template rendering.
 #[derive(Debug, Clone)]
@@ -38,8 +55,8 @@ impl<'a> TemplateRenderer<'a> {
     }
 
     /// Renders the full Dockerfile by composing the base template with runtime
-    /// layers discovered from the runtime registry.
-    pub fn render(&self, config: &Config) -> Result<String> {
+    /// layers discovered from the runtime registry, plus the entrypoint script.
+    pub fn render(&self, config: &Config) -> Result<RenderResult> {
         let tmpl = self.env.get_template("base")?;
         let mut rendered = tmpl.render(context! {})?;
 
@@ -55,7 +72,22 @@ impl<'a> TemplateRenderer<'a> {
             rendered.push_str(&layer);
         }
 
-        Ok(rendered)
+        // Append entrypoint instructions
+        rendered.push_str("\nCOPY entrypoint.sh /usr/local/bin/entrypoint.sh\n");
+        rendered.push_str("RUN chmod +x /usr/local/bin/entrypoint.sh\n");
+        rendered.push_str("ENTRYPOINT [\"/usr/local/bin/entrypoint.sh\"]\n");
+        rendered.push_str("CMD [\"sleep\", \"infinity\"]\n");
+
+        let context_files = vec![ContextFile {
+            path: "entrypoint.sh".to_string(),
+            content: ENTRYPOINT_SCRIPT.to_string(),
+            mode: 0o755,
+        }];
+
+        Ok(RenderResult {
+            dockerfile: rendered,
+            context_files,
+        })
     }
 }
 
@@ -83,7 +115,8 @@ mod tests {
     fn render_base_template() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("git"));
@@ -102,17 +135,17 @@ mod tests {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), Some("22"), true, Some("1.23"));
 
-        let output1 = renderer.render(&config).unwrap();
-        let output2 = renderer.render(&config).unwrap();
-        assert_eq!(output1, output2);
+        let result1 = renderer.render(&config).unwrap();
+        let result2 = renderer.render(&config).unwrap();
+        assert_eq!(result1.dockerfile, result2.dockerfile);
     }
 
     #[test]
     fn base_template_uses_ubuntu_2404() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
-        let first_line = output.lines().next().unwrap();
+        let result = renderer.render(&config).unwrap();
+        let first_line = result.dockerfile.lines().next().unwrap();
         assert_eq!(first_line, "FROM ubuntu:24.04");
     }
 
@@ -141,7 +174,8 @@ mod tests {
     fn render_with_php_83() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), None, false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("php8.3-cli"));
@@ -166,7 +200,8 @@ mod tests {
     fn render_with_php_81() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.1"), None, false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("php8.1-cli"));
         assert!(output.contains("php8.1-mbstring"));
@@ -177,7 +212,8 @@ mod tests {
     fn render_with_php_82() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.2"), None, false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("php8.2-cli"));
         assert!(output.contains("php8.2-redis"));
@@ -187,7 +223,8 @@ mod tests {
     fn render_without_php_has_no_php_layer() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(!output.contains("php"));
         assert!(!output.contains("composer"));
@@ -197,9 +234,9 @@ mod tests {
     fn render_php_is_deterministic() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), None, false, None);
-        let output1 = renderer.render(&config).unwrap();
-        let output2 = renderer.render(&config).unwrap();
-        assert_eq!(output1, output2);
+        let result1 = renderer.render(&config).unwrap();
+        let result2 = renderer.render(&config).unwrap();
+        assert_eq!(result1.dockerfile, result2.dockerfile);
     }
 
     #[test]
@@ -214,7 +251,8 @@ mod tests {
     fn render_with_node_22() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, Some("22"), false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("nodesource"));
@@ -226,7 +264,8 @@ mod tests {
     fn render_with_node_18() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, Some("18"), false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("setup_18.x"));
         assert!(!output.contains("setup_22.x"));
@@ -236,7 +275,8 @@ mod tests {
     fn render_with_node_20() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, Some("20"), false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("setup_20.x"));
     }
@@ -245,7 +285,8 @@ mod tests {
     fn render_without_node_has_no_node_layer() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(!output.contains("nodesource"));
         assert!(!output.contains("nodejs"));
@@ -263,7 +304,8 @@ mod tests {
     fn render_with_php_and_node() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), Some("22"), false, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("php8.3-cli"));
@@ -279,7 +321,8 @@ mod tests {
     fn render_with_rust() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, None, true, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("rustup.rs"));
@@ -292,7 +335,8 @@ mod tests {
     fn render_without_rust_has_no_rust_layer() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(!output.contains("rustup"));
         assert!(!output.contains("CARGO_HOME"));
@@ -302,7 +346,8 @@ mod tests {
     fn render_with_node_and_rust_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, Some("22"), true, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("nodesource"));
         assert!(output.contains("rustup.rs"));
@@ -316,7 +361,8 @@ mod tests {
     fn render_with_php_node_and_rust_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), Some("22"), true, None);
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
@@ -329,7 +375,8 @@ mod tests {
     fn render_with_go_123() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, None, false, Some("1.23"));
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("FROM ubuntu:24.04"));
         assert!(output.contains("go1.23.linux-${ARCH}"));
@@ -342,7 +389,8 @@ mod tests {
     fn render_with_go_122() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, None, false, Some("1.22"));
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("go1.22.linux-${ARCH}"));
         assert!(!output.contains("go1.23"));
@@ -352,7 +400,8 @@ mod tests {
     fn render_without_go_has_no_go_layer() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(!output.contains("go.dev"));
         assert!(!output.contains("GOPATH"));
@@ -370,7 +419,8 @@ mod tests {
     fn render_go_architecture_aware() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, None, false, Some("1.23"));
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("uname -m"));
         assert!(output.contains("amd64"));
@@ -381,7 +431,8 @@ mod tests {
     fn render_with_rust_and_go_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(None, None, true, Some("1.23"));
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         assert!(output.contains("rustup.rs"));
         assert!(output.contains("go.dev"));
@@ -395,7 +446,8 @@ mod tests {
     fn render_with_all_runtimes_ordering() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = config_with_runtimes(Some("8.3"), Some("22"), true, Some("1.23"));
-        let output = renderer.render(&config).unwrap();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
@@ -412,9 +464,9 @@ mod tests {
         let config1 = config_with_runtimes(Some("8.3"), None, false, None);
         let config2 = config_with_runtimes(Some("8.3"), Some("22"), false, None);
 
-        let output1 = renderer.render(&config1).unwrap();
-        let output2 = renderer.render(&config2).unwrap();
-        assert_ne!(output1, output2, "Adding a runtime should change the Dockerfile");
+        let result1 = renderer.render(&config1).unwrap();
+        let result2 = renderer.render(&config2).unwrap();
+        assert_ne!(result1.dockerfile, result2.dockerfile, "Adding a runtime should change the Dockerfile");
     }
 
     #[test]
@@ -423,8 +475,79 @@ mod tests {
         let config1 = config_with_runtimes(Some("8.2"), None, false, None);
         let config2 = config_with_runtimes(Some("8.3"), None, false, None);
 
-        let output1 = renderer.render(&config1).unwrap();
-        let output2 = renderer.render(&config2).unwrap();
-        assert_ne!(output1, output2, "Changing a version should change the Dockerfile");
+        let result1 = renderer.render(&config1).unwrap();
+        let result2 = renderer.render(&config2).unwrap();
+        assert_ne!(result1.dockerfile, result2.dockerfile, "Changing a version should change the Dockerfile");
+    }
+
+    #[test]
+    fn render_includes_entrypoint() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
+
+        assert!(output.contains("COPY entrypoint.sh /usr/local/bin/entrypoint.sh"));
+        assert!(output.contains("ENTRYPOINT [\"/usr/local/bin/entrypoint.sh\"]"));
+        assert!(output.contains("CMD [\"sleep\", \"infinity\"]"));
+    }
+
+    #[test]
+    fn render_entrypoint_after_runtimes() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = config_with_runtimes(Some("8.3"), None, false, None);
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
+
+        let php_pos = output.find("php8.3-cli").unwrap();
+        let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
+        assert!(php_pos < entrypoint_pos, "Entrypoint should come after runtime layers");
+    }
+
+    #[test]
+    fn render_context_files_includes_entrypoint() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+
+        assert_eq!(result.context_files.len(), 1);
+        assert_eq!(result.context_files[0].path, "entrypoint.sh");
+        assert!(result.context_files[0].content.contains("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(result.context_files[0].content.contains(".credentials.json"));
+        assert_eq!(result.context_files[0].mode, 0o755);
+    }
+
+    #[test]
+    fn entrypoint_script_unsets_env_var() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+
+        let entrypoint = &result.context_files[0].content;
+        assert!(entrypoint.contains("unset CLAUDE_CODE_OAUTH_TOKEN"));
+    }
+
+    #[test]
+    fn entrypoint_script_writes_credentials_json() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+
+        let entrypoint = &result.context_files[0].content;
+        assert!(entrypoint.contains("/.claude/.credentials.json"));
+        assert!(entrypoint.contains("claudeAiOauth"));
+    }
+
+    #[test]
+    fn entrypoint_script_works_with_uid_mapping() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+
+        let entrypoint = &result.context_files[0].content;
+        // Uses $HOME which respects the user mapping
+        assert!(entrypoint.contains("${HOME}/.claude"));
+        // Sets secure permissions
+        assert!(entrypoint.contains("chmod 600"));
     }
 }
