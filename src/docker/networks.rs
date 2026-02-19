@@ -60,6 +60,40 @@ impl NetworkManager {
             .any(|n| n.name.as_deref() == Some(name)))
     }
 
+    /// Detects and removes stale networks matching the `bubble-boy-<project>` prefix.
+    /// Returns the number of networks removed.
+    pub async fn cleanup_stale(&self, project_prefix: &str) -> Result<usize> {
+        let filters: HashMap<String, Vec<String>> =
+            [("name".to_string(), vec![project_prefix.to_string()])]
+                .into_iter()
+                .collect();
+
+        let networks = self
+            .docker
+            .list_networks(Some(ListNetworksOptions { filters }))
+            .await
+            .context("failed to list networks for stale detection")?;
+
+        let mut removed = 0;
+
+        for network in &networks {
+            let name = network.name.as_deref().unwrap_or("");
+            if matches_stale_prefix(name, project_prefix) {
+                warn!(network = %name, "removing stale network from previous session");
+                match self.docker.remove_network(name).await {
+                    Ok(()) => {
+                        removed += 1;
+                    }
+                    Err(e) => {
+                        warn!(network = %name, error = %e, "failed to remove stale network (may have active endpoints)");
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
     /// Removes the network. Logs a warning if it doesn't exist or removal fails.
     pub async fn remove_network(&self, name: &str) -> Result<()> {
         match self.docker.remove_network(name).await {
@@ -72,6 +106,12 @@ impl NetworkManager {
         }
         Ok(())
     }
+}
+
+/// Checks whether a network name matches the stale detection prefix.
+/// Returns true if the name is exactly the prefix or starts with `prefix-`.
+pub fn matches_stale_prefix(network_name: &str, prefix: &str) -> bool {
+    network_name == prefix || network_name.starts_with(&format!("{prefix}-"))
 }
 
 /// Derives the default network name from the current working directory.
@@ -107,5 +147,32 @@ mod tests {
         let network_name = default_network_name();
         let container_name = crate::docker::containers::default_container_name();
         assert_eq!(network_name, container_name);
+    }
+
+    #[test]
+    fn stale_prefix_matches_exact_network_name() {
+        assert!(matches_stale_prefix("bubble-boy-myproject", "bubble-boy-myproject"));
+    }
+
+    #[test]
+    fn stale_prefix_matches_network_with_suffix() {
+        // Unlikely for networks but should handle `prefix-*` pattern
+        assert!(matches_stale_prefix(
+            "bubble-boy-myproject-extra",
+            "bubble-boy-myproject"
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_rejects_different_project_network() {
+        assert!(!matches_stale_prefix(
+            "bubble-boy-otherproject",
+            "bubble-boy-myproject"
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_rejects_non_bubble_boy_network() {
+        assert!(!matches_stale_prefix("my-network", "bubble-boy-myproject"));
     }
 }

@@ -266,6 +266,26 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
     Ok(())
 }
 
+/// Detects and removes stale containers and networks from crashed previous sessions.
+/// Should be called on startup before creating new resources.
+async fn cleanup_stale_resources(docker: &Docker, container_name: &str) -> Result<()> {
+    let container_mgr = ContainerManager::new(docker.clone());
+    let network_mgr = NetworkManager::new(docker.clone());
+
+    let containers_removed = container_mgr.cleanup_stale(container_name).await?;
+    let networks_removed = network_mgr.cleanup_stale(container_name).await?;
+
+    if containers_removed > 0 || networks_removed > 0 {
+        info!(
+            containers_removed,
+            networks_removed,
+            "cleaned up stale resources from previous session"
+        );
+    }
+
+    Ok(())
+}
+
 /// Starts all configured service containers on the given network.
 /// Returns a list of (service_name, container_id) tuples for cleanup.
 async fn start_services(
@@ -316,6 +336,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .network
         .clone()
         .unwrap_or_else(default_network_name);
+
+    // Detect and clean up stale containers/networks from previous sessions
+    cleanup_stale_resources(&docker, &container_name).await?;
 
     // Render Dockerfile with Chief installation
     let renderer = TemplateRenderer::new()?;
@@ -438,6 +461,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .clone()
         .unwrap_or_else(default_network_name);
 
+    // Detect and clean up stale containers/networks from previous sessions
+    cleanup_stale_resources(&docker, &container_name).await?;
+
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
     let render_result = renderer.render(config)?;
@@ -558,6 +584,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         .network
         .clone()
         .unwrap_or_else(default_network_name);
+
+    // Detect and clean up stale containers/networks from previous sessions
+    cleanup_stale_resources(&docker, &container_name).await?;
 
     // Resolve shell (config > $SHELL > bash fallback)
     let shell = resolve_shell(config.container.shell.as_deref());

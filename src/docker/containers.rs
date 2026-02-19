@@ -81,6 +81,68 @@ impl ContainerManager {
         Ok(())
     }
 
+    /// Detects and removes all stale containers matching the `bubble-boy-<project>` prefix.
+    /// This catches dev containers and service containers from crashed sessions.
+    /// Returns the number of containers removed.
+    pub async fn cleanup_stale(&self, project_prefix: &str) -> Result<usize> {
+        let filters: HashMap<String, Vec<String>> =
+            [("name".to_string(), vec![project_prefix.to_string()])]
+                .into_iter()
+                .collect();
+
+        let containers = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters,
+                ..Default::default()
+            }))
+            .await
+            .context("failed to list containers for stale detection")?;
+
+        let mut removed = 0;
+
+        for container in &containers {
+            let names = container.names.as_deref().unwrap_or_default();
+            let is_match = names
+                .iter()
+                .any(|n| matches_stale_prefix(n, project_prefix));
+
+            if is_match {
+                let id = container.id.as_deref().unwrap_or("unknown");
+                let name = names.first().map(|s| s.as_str()).unwrap_or("unknown");
+                warn!(name, id, "removing stale container from previous session");
+
+                // Stop if running
+                let _ = self
+                    .docker
+                    .stop_container(id, Some(StopContainerOptions { t: 5 }))
+                    .await;
+
+                match self
+                    .docker
+                    .remove_container(
+                        id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        removed += 1;
+                    }
+                    Err(e) => {
+                        warn!(name, id, error = %e, "failed to remove stale container");
+                    }
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
     /// Creates and starts a container, returning the container ID.
     pub async fn create_and_start(&self, opts: &ContainerOpts) -> Result<String> {
         let uid = unsafe { libc::getuid() };
@@ -340,6 +402,15 @@ impl ContainerManager {
     }
 }
 
+/// Checks whether a container name matches the stale detection prefix.
+/// Returns true if the name is exactly the prefix or starts with `prefix-`.
+/// Container names from Docker include a leading `/`.
+pub fn matches_stale_prefix(container_name: &str, prefix: &str) -> bool {
+    let prefix_with_slash = format!("/{prefix}");
+    container_name == prefix_with_slash
+        || container_name.starts_with(&format!("{prefix_with_slash}-"))
+}
+
 /// Derives the default container name from the current working directory.
 /// Returns `bubble-boy-<dir-name>` or `bubble-boy-project` as fallback.
 pub fn default_container_name() -> String {
@@ -365,5 +436,49 @@ mod tests {
         let name = default_container_name();
         let suffix = name.strip_prefix("bubble-boy-").unwrap();
         assert!(!suffix.is_empty());
+    }
+
+    #[test]
+    fn stale_prefix_matches_exact_container_name() {
+        // Docker container names have leading `/`
+        assert!(matches_stale_prefix(
+            "/bubble-boy-myproject",
+            "bubble-boy-myproject"
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_matches_service_container() {
+        // Service containers are named `bubble-boy-<project>-<service>`
+        assert!(matches_stale_prefix(
+            "/bubble-boy-myproject-mysql",
+            "bubble-boy-myproject"
+        ));
+        assert!(matches_stale_prefix(
+            "/bubble-boy-myproject-redis",
+            "bubble-boy-myproject"
+        ));
+        assert!(matches_stale_prefix(
+            "/bubble-boy-myproject-postgres",
+            "bubble-boy-myproject"
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_rejects_different_project() {
+        // Should not match containers from a different project
+        assert!(!matches_stale_prefix(
+            "/bubble-boy-otherproject",
+            "bubble-boy-myproject"
+        ));
+        assert!(!matches_stale_prefix(
+            "/bubble-boy-otherproject-mysql",
+            "bubble-boy-myproject"
+        ));
+    }
+
+    #[test]
+    fn stale_prefix_rejects_non_bubble_boy() {
+        assert!(!matches_stale_prefix("/some-other-container", "bubble-boy-myproject"));
     }
 }
