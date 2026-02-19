@@ -23,6 +23,7 @@ use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
 use services::Service;
 use services::mysql::MysqlService;
+use services::postgres::PostgresService;
 use services::redis::RedisService;
 use templates::TemplateRenderer;
 
@@ -68,6 +69,13 @@ fn collect_services(config: &Config) -> Vec<Box<dyn Service>> {
 
     if config.services.redis == Some(true) {
         services.push(Box::new(RedisService::new(project.clone())));
+    }
+
+    if let Some(ref postgres_config) = config.services.postgres {
+        services.push(Box::new(PostgresService::new(
+            postgres_config.clone(),
+            project.clone(),
+        )));
     }
 
     services

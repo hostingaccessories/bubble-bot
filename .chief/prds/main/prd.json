@@ -290,7 +290,8 @@
         "Config values from `.bubble-boy.toml` `[services.postgres]`"
       ],
       "priority": 18,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-019",

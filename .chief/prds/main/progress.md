@@ -47,7 +47,7 @@
 - Docker name filter for networks also returns partial matches — filter for exact name match in results
 - `Service` trait has 7 methods: `name()`, `image()`, `container_env()`, `dev_env()`, `volume()`, `readiness_cmd()`, `container_name()` (default impl)
 - Service containers use `Mount` with `MountTypeEnum::VOLUME` for named Docker volumes; volume format is `vol_name:container_path`
-- `collect_services(config)` in `main.rs` builds `Vec<Box<dyn Service>>` — add new services here (Redis, Postgres)
+- `collect_services(config)` in `main.rs` builds `Vec<Box<dyn Service>>` — add new services here; MySQL/Postgres use `Option<Config>` guard, Redis uses `Option<bool>` guard
 - MySQL root user: only set `MYSQL_ROOT_PASSWORD` + `MYSQL_DATABASE` (MySQL rejects `MYSQL_USER=root`)
 - `wait_for_ready()` uses `docker exec` with retry loop (30 attempts, 2s interval) for service readiness probes
 - Cleanup order: dev container → service containers → network (named volumes preserved)
@@ -311,4 +311,19 @@
   - Redis readiness probe is simply `redis-cli ping` — returns PONG when ready
   - Pattern for boolean services: check `config.services.redis == Some(true)` since the field is `Option<bool>`
   - All 117 tests pass (110 existing + 7 new Redis tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-018
+- What was implemented: PostgreSQL service container — `PostgresService` implementing `Service` trait; uses `postgres:<version>` image (version parameterized, default 16); named volume for data persistence (`bubble-boy-<project>-postgres-data:/var/lib/postgresql/data`); readiness probe via `pg_isready -U <username>`; injects `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` into service container and `DB_HOST=postgres`, `DB_PORT=5432`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` into dev container; config values from `[services.postgres]` in `.bubble-boy.toml`; wired into `collect_services()` in main.rs
+- Files changed:
+  - `src/services/postgres.rs` — Complete rewrite: `PostgresService` struct with `PostgresConfig` + `project_name`; implements all `Service` trait methods; 8 unit tests
+  - `src/main.rs` — Added `PostgresService` import and wired into `collect_services()` with `config.services.postgres` guard (same pattern as MySQL)
+- **Learnings for future iterations:**
+  - PostgreSQL follows the same pattern as MySQL — config struct with version/database/username/password, named volume for persistence
+  - PostgreSQL data directory is `/var/lib/postgresql/data` (not `/var/lib/postgres`)
+  - `pg_isready -U <username>` is the standard PostgreSQL readiness probe — simpler than MySQL's `mysqladmin ping`
+  - PostgreSQL env vars use `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (not `PGUSER` etc.)
+  - Unlike MySQL, PostgreSQL doesn't have special root user handling — `POSTGRES_USER` works for any username
+  - `PostgresConfig` already existed in config.rs with defaults (version: "16", database: "app", username: "postgres", password: "password")
+  - All 125 tests pass (117 existing + 8 new PostgreSQL tests), clippy clean, build clean
 ---
