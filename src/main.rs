@@ -21,6 +21,8 @@ use config::Config;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
+use services::Service;
+use services::mysql::MysqlService;
 use templates::TemplateRenderer;
 
 #[tokio::main]
@@ -41,6 +43,61 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Returns the project directory name used for naming containers and volumes.
+fn project_name() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "project".to_string())
+}
+
+/// Collects service containers to start based on the resolved config.
+fn collect_services(config: &Config) -> Vec<Box<dyn Service>> {
+    let project = project_name();
+    let mut services: Vec<Box<dyn Service>> = Vec::new();
+
+    if let Some(ref mysql_config) = config.services.mysql {
+        services.push(Box::new(MysqlService::new(
+            mysql_config.clone(),
+            project.clone(),
+        )));
+    }
+
+    services
+}
+
+/// Starts all configured service containers on the given network.
+/// Returns a list of (service_name, container_id) tuples for cleanup.
+async fn start_services(
+    container_mgr: &ContainerManager,
+    services: &[Box<dyn Service>],
+    network: &str,
+) -> Result<Vec<String>> {
+    let project = project_name();
+    let mut service_ids = Vec::new();
+
+    for service in services {
+        let id = container_mgr
+            .start_service(service.as_ref(), network, &project)
+            .await?;
+        container_mgr.wait_for_ready(&id, service.as_ref(), 30, 2)?;
+        service_ids.push(id);
+    }
+
+    Ok(service_ids)
+}
+
+/// Stops and removes all service containers.
+async fn cleanup_services(
+    container_mgr: &ContainerManager,
+    service_ids: &[String],
+) -> Result<()> {
+    for id in service_ids {
+        container_mgr.stop_and_remove(id).await?;
+    }
+    Ok(())
 }
 
 async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
@@ -85,6 +142,12 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
     }
 
+    // Collect service env vars for the dev container
+    let services = collect_services(config);
+    for service in &services {
+        env_vars.extend(service.dev_env());
+    }
+
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
     network_mgr.ensure_network(&network_name).await?;
@@ -92,7 +155,10 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Container lifecycle
     let container_mgr = ContainerManager::new(docker);
 
-    // Clean up any existing container with the same name
+    // Start service containers
+    let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
     let opts = ContainerOpts {
@@ -116,6 +182,7 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Cleanup on exit
     container_mgr.stop_and_remove(&container_id).await?;
+    cleanup_services(&container_mgr, &service_ids).await?;
     network_mgr.remove_network(&network_name).await?;
 
     if exit_code != 0 {
@@ -174,6 +241,12 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
     }
 
+    // Collect service env vars for the dev container
+    let services = collect_services(config);
+    for service in &services {
+        env_vars.extend(service.dev_env());
+    }
+
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
     network_mgr.ensure_network(&network_name).await?;
@@ -181,7 +254,10 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     // Container lifecycle
     let container_mgr = ContainerManager::new(docker);
 
-    // Clean up any existing container with the same name
+    // Start service containers
+    let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
     let opts = ContainerOpts {
@@ -200,6 +276,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     // Cleanup on shell exit
     container_mgr.stop_and_remove(&container_id).await?;
+    cleanup_services(&container_mgr, &service_ids).await?;
     network_mgr.remove_network(&network_name).await?;
 
     if exit_code != 0 {

@@ -7,8 +7,10 @@ use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, NetworkingConfig,
     RemoveContainerOptions, StopContainerOptions,
 };
-use bollard::models::{EndpointSettings, HostConfig};
+use bollard::models::{EndpointSettings, HostConfig, Mount, MountTypeEnum};
 use tracing::{info, warn};
+
+use crate::services::Service;
 
 /// Manages the lifecycle of the dev container: create, start, exec, stop, remove.
 pub struct ContainerManager {
@@ -201,6 +203,136 @@ impl ContainerManager {
         info!(id = %container_id, "container removed");
 
         Ok(())
+    }
+
+    /// Starts a service container (e.g., MySQL, Redis, PostgreSQL) on the given network.
+    /// Returns the container ID.
+    pub async fn start_service(
+        &self,
+        service: &dyn Service,
+        network: &str,
+        project_name: &str,
+    ) -> Result<String> {
+        let container_name = service.container_name(project_name);
+
+        // Clean up any existing service container
+        self.cleanup_existing(&container_name).await?;
+
+        let env = Some(service.container_env());
+
+        // Configure volume mount if the service needs persistent storage
+        let mounts = service.volume().map(|vol| {
+            let parts: Vec<&str> = vol.splitn(2, ':').collect();
+            vec![Mount {
+                target: Some(parts[1].to_string()),
+                source: Some(parts[0].to_string()),
+                typ: Some(MountTypeEnum::VOLUME),
+                ..Default::default()
+            }]
+        });
+
+        let host_config = HostConfig {
+            network_mode: Some(network.to_string()),
+            mounts,
+            ..Default::default()
+        };
+
+        // Attach to network with service name as alias for hostname-based discovery
+        let endpoint = EndpointSettings {
+            aliases: Some(vec![service.name().to_string()]),
+            ..Default::default()
+        };
+        let mut endpoints_config = HashMap::new();
+        endpoints_config.insert(network.to_string(), endpoint);
+        let networking_config = Some(NetworkingConfig { endpoints_config });
+
+        let config = Config {
+            image: Some(service.image()),
+            env,
+            host_config: Some(host_config),
+            networking_config,
+            ..Default::default()
+        };
+
+        let create_opts = CreateContainerOptions {
+            name: container_name.clone(),
+            ..Default::default()
+        };
+
+        let response = self
+            .docker
+            .create_container(Some(create_opts), config)
+            .await
+            .context(format!("failed to create {} container", service.name()))?;
+
+        let container_id = response.id;
+        info!(service = service.name(), id = %container_id, "service container created");
+
+        self.docker
+            .start_container::<String>(&container_id, None)
+            .await
+            .context(format!("failed to start {} container", service.name()))?;
+
+        info!(service = service.name(), id = %container_id, "service container started");
+
+        Ok(container_id)
+    }
+
+    /// Waits for a service container to become ready by retrying a readiness command.
+    /// Uses `docker exec` with a retry loop (up to `max_retries` attempts with `interval` seconds between).
+    pub fn wait_for_ready(
+        &self,
+        container_id: &str,
+        service: &dyn Service,
+        max_retries: u32,
+        interval_secs: u64,
+    ) -> Result<()> {
+        let cmd = service.readiness_cmd();
+        info!(
+            service = service.name(),
+            container = %container_id,
+            "waiting for service to be ready"
+        );
+
+        for attempt in 1..=max_retries {
+            let mut args = vec!["exec", container_id];
+            let cmd_refs: Vec<&str> = cmd.iter().map(|s| s.as_str()).collect();
+            args.extend(&cmd_refs);
+
+            let status = Command::new("docker")
+                .args(&args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+
+            match status {
+                Ok(s) if s.success() => {
+                    info!(
+                        service = service.name(),
+                        attempt,
+                        "service is ready"
+                    );
+                    return Ok(());
+                }
+                _ => {
+                    if attempt < max_retries {
+                        info!(
+                            service = service.name(),
+                            attempt,
+                            max_retries,
+                            "service not ready, retrying..."
+                        );
+                        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "{} service did not become ready after {} attempts",
+            service.name(),
+            max_retries
+        );
     }
 }
 

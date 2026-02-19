@@ -259,7 +259,8 @@
         "Container stopped and removed on cleanup; named volume preserved"
       ],
       "priority": 16,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-017",

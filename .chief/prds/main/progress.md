@@ -45,6 +45,12 @@
 - `ContainerOpts.network: Option<String>` — when set, container joins the network via `HostConfig.network_mode` + `NetworkingConfig` with alias
 - bollard has two `NetworkingConfig` types: use `bollard::container::NetworkingConfig` (generic `<T>`) for container creation, NOT `bollard::models::NetworkingConfig`
 - Docker name filter for networks also returns partial matches — filter for exact name match in results
+- `Service` trait has 7 methods: `name()`, `image()`, `container_env()`, `dev_env()`, `volume()`, `readiness_cmd()`, `container_name()` (default impl)
+- Service containers use `Mount` with `MountTypeEnum::VOLUME` for named Docker volumes; volume format is `vol_name:container_path`
+- `collect_services(config)` in `main.rs` builds `Vec<Box<dyn Service>>` — add new services here (Redis, Postgres)
+- MySQL root user: only set `MYSQL_ROOT_PASSWORD` + `MYSQL_DATABASE` (MySQL rejects `MYSQL_USER=root`)
+- `wait_for_ready()` uses `docker exec` with retry loop (30 attempts, 2s interval) for service readiness probes
+- Cleanup order: dev container → service containers → network (named volumes preserved)
 
 ---
 
@@ -272,4 +278,23 @@
   - `HostConfig.network_mode` + `NetworkingConfig` with alias is the correct way to attach a container to a network at creation time
   - Service containers (future stories) will also use `NetworkManager::ensure_network()` and the same network name, making them reachable by hostname
   - All 102 tests pass (99 existing + 3 new network tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-016
+- What was implemented: MySQL service container — `MysqlService` implementing expanded `Service` trait; `ContainerManager` extended with `start_service()` and `wait_for_ready()` methods; `main.rs` wired with `collect_services()`, `start_services()`, `cleanup_services()` helpers; service containers start before dev container and cleanup after
+- Files changed:
+  - `src/services/mod.rs` — Expanded `Service` trait with 7 methods: `name()`, `image()`, `container_env()`, `dev_env()`, `volume()`, `readiness_cmd()`, `container_name()` (with default impl)
+  - `src/services/mysql.rs` — Complete rewrite: `MysqlService` struct with `MysqlConfig` + `project_name`; implements all `Service` trait methods; root vs non-root MySQL user handling; 8 unit tests
+  - `src/docker/containers.rs` — Added `start_service()` method (creates/starts service container with volume mounts and network alias) and `wait_for_ready()` method (retry loop with `docker exec` readiness probe); imports `Mount`, `MountTypeEnum`, and `crate::services::Service`
+  - `src/main.rs` — Added `project_name()`, `collect_services()`, `start_services()`, `cleanup_services()` helpers; both `run_shell()` and `run_claude()` now start service containers before dev container and clean them up after
+  - `.chief/prds/main/prd.json` — Marked US-016 as passes: true
+- **Learnings for future iterations:**
+  - `Service` trait has 7 methods — `container_name()` has a default impl using `bubble-boy-<project>-<service_name>` pattern
+  - MySQL root user: only set `MYSQL_ROOT_PASSWORD` and `MYSQL_DATABASE` (MySQL rejects `MYSQL_USER=root`); for non-root add `MYSQL_USER` + `MYSQL_PASSWORD`
+  - Service containers use `bollard::models::Mount` with `MountTypeEnum::VOLUME` for named Docker volumes (not bind mounts)
+  - `wait_for_ready()` uses `std::process::Command` with `docker exec` (not bollard exec API) to match the pattern used for interactive commands; stdout/stderr set to null for clean output
+  - `collect_services()` in `main.rs` builds `Vec<Box<dyn Service>>` from config — future services (Redis US-017, Postgres US-018) just need to be added here
+  - Service env vars are injected into the dev container via `dev_env()` — appended to `env_vars` before container creation
+  - Cleanup order: dev container first, then service containers, then network (preserves named volumes)
+  - All 110 tests pass (102 existing + 8 new MySQL tests), clippy clean, build clean
 ---
