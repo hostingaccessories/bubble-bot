@@ -23,6 +23,7 @@ use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
 use services::Service;
 use services::mysql::MysqlService;
+use services::redis::RedisService;
 use templates::TemplateRenderer;
 
 #[tokio::main]
@@ -63,6 +64,10 @@ fn collect_services(config: &Config) -> Vec<Box<dyn Service>> {
             mysql_config.clone(),
             project.clone(),
         )));
+    }
+
+    if config.services.redis == Some(true) {
+        services.push(Box::new(RedisService::new(project.clone())));
     }
 
     services

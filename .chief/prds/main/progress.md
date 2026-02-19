@@ -51,6 +51,7 @@
 - MySQL root user: only set `MYSQL_ROOT_PASSWORD` + `MYSQL_DATABASE` (MySQL rejects `MYSQL_USER=root`)
 - `wait_for_ready()` uses `docker exec` with retry loop (30 attempts, 2s interval) for service readiness probes
 - Cleanup order: dev container → service containers → network (named volumes preserved)
+- Boolean services (like Redis) use `Option<bool>` in config — check `== Some(true)` in `collect_services()`; no config struct needed
 
 ---
 
@@ -297,4 +298,17 @@
   - Service env vars are injected into the dev container via `dev_env()` — appended to `env_vars` before container creation
   - Cleanup order: dev container first, then service containers, then network (preserves named volumes)
   - All 110 tests pass (102 existing + 8 new MySQL tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-017
+- What was implemented: Redis service container — `RedisService` implementing `Service` trait; uses `redis:alpine` image; readiness probe via `redis-cli ping`; injects `REDIS_HOST=redis` and `REDIS_PORT=6379` env vars into dev container; no volume (ephemeral); wired into `collect_services()` in main.rs
+- Files changed:
+  - `src/services/redis.rs` — Complete rewrite: `RedisService` struct with `project_name` field; implements all `Service` trait methods; no container env needed (Redis needs no auth by default); 7 unit tests
+  - `src/main.rs` — Added `RedisService` import and wired into `collect_services()` with `config.services.redis == Some(true)` guard
+- **Learnings for future iterations:**
+  - Redis is simpler than MySQL — no config struct needed (just a boolean flag in `ServiceConfig`), no container env vars, no volume
+  - `redis:alpine` is the default image tag per the acceptance criteria
+  - Redis readiness probe is simply `redis-cli ping` — returns PONG when ready
+  - Pattern for boolean services: check `config.services.redis == Some(true)` since the field is `Option<bool>`
+  - All 117 tests pass (110 existing + 7 new Redis tests), clippy clean, build clean
 ---

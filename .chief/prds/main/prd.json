@@ -274,7 +274,8 @@
         "Container stopped and removed on cleanup"
       ],
       "priority": 17,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-018",
