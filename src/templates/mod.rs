@@ -139,7 +139,6 @@ mod tests {
         assert!(output.contains("ca-certificates"));
         assert!(output.contains("mkdir -p /home/dev/.claude"));
         assert!(output.contains("chmod -R 777 /home/dev"));
-        assert!(output.contains("hasCompletedOnboarding"));
         assert!(output.contains("claude.ai/install.sh"));
         assert!(output.contains("/home/dev/.local/bin"));
         assert!(output.contains("/etc/profile.d/claude.sh"));

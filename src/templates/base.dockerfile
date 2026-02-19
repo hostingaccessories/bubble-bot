@@ -19,6 +19,5 @@ ENV PATH="/home/dev/.local/bin:${PATH}"
 RUN echo 'export PATH="$HOME/.local/bin:$PATH"' > /etc/profile.d/claude.sh
 RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN mkdir -p /home/dev/.claude && chmod -R 777 /home/dev
-RUN echo '{"hasCompletedOnboarding":true}' > /home/dev/.claude.json
 
 WORKDIR /workspace

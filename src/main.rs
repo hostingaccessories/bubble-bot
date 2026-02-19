@@ -17,7 +17,7 @@ use clap::Parser;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use auth::resolve_oauth_token;
+use auth::{resolve_claude_config, resolve_oauth_token};
 use cli::{Cli, Command};
 use config::Config;
 use docker::clean::Cleaner;
@@ -371,8 +371,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token (written to container after start, not via env)
+    // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
+    let claude_config = resolve_claude_config()?;
 
     // Collect service env vars for the dev container
     let mut env_vars = Vec::new();
@@ -423,6 +424,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     if let Some(ref token) = oauth_token {
         container_mgr.write_credentials(&container_id, token)?;
     }
+
+    // Write Claude config into container
+    container_mgr.write_claude_config(&container_id, &claude_config)?;
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -491,8 +495,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token (written to container after start, not via env)
+    // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
+    let claude_config = resolve_claude_config()?;
 
     // Collect service env vars for the dev container
     let mut env_vars = Vec::new();
@@ -543,6 +548,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     if let Some(ref token) = oauth_token {
         container_mgr.write_credentials(&container_id, token)?;
     }
+
+    // Write Claude config into container
+    container_mgr.write_claude_config(&container_id, &claude_config)?;
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -611,8 +619,9 @@ async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token (written to container after start, not via env)
+    // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
+    let claude_config = resolve_claude_config()?;
 
     // Collect service env vars for the dev container
     let mut env_vars = Vec::new();
@@ -663,6 +672,9 @@ async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
     if let Some(ref token) = oauth_token {
         container_mgr.write_credentials(&container_id, token)?;
     }
+
+    // Write Claude config into container
+    container_mgr.write_claude_config(&container_id, &claude_config)?;
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -736,8 +748,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token (written to container after start, not via env)
+    // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
+    let claude_config = resolve_claude_config()?;
 
     // Collect service env vars for the dev container
     let mut env_vars = Vec::new();
@@ -788,6 +801,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     if let Some(ref token) = oauth_token {
         container_mgr.write_credentials(&container_id, token)?;
     }
+
+    // Write Claude config into container
+    container_mgr.write_claude_config(&container_id, &claude_config)?;
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);

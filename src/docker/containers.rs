@@ -275,6 +275,35 @@ impl ContainerManager {
         Ok(())
     }
 
+    /// Writes the Claude config file (`~/.claude.json`) inside the container.
+    /// Pipes the content via stdin to avoid exposing config in process arguments.
+    pub fn write_claude_config(&self, container_id: &str, config: &str) -> Result<()> {
+        use std::io::Write;
+
+        let mut child = Command::new("docker")
+            .args([
+                "exec", "-i", container_id, "sh", "-c",
+                "cat > \"${HOME}/.claude.json\"",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("failed to spawn docker exec for claude config")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(config.as_bytes())?;
+        }
+
+        let status = child.wait().context("failed to wait for claude config write")?;
+        if !status.success() {
+            anyhow::bail!("failed to write claude config to container");
+        }
+
+        info!(container = %container_id, "Claude config written");
+        Ok(())
+    }
+
     /// Runs a command inside the container via `docker exec` (non-interactive).
     /// Inherits stdout and stderr but does not allocate a TTY.
     pub fn exec_command(&self, container_id: &str, cmd: &[&str]) -> Result<i32> {

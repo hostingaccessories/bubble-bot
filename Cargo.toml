@@ -8,6 +8,7 @@ rust-version = "1.85"
 anyhow = "1"
 bollard = "0.18"
 clap = { version = "4", features = ["derive"] }
+console = "0.16.2"
 dirs = "6"
 futures-util = "0.3"
 indicatif = "0.17"

@@ -118,7 +118,8 @@ impl ImageBuilder {
             match result {
                 Ok(output) => {
                     if let Some(stream_msg) = &output.stream {
-                        let trimmed = stream_msg.trim_end();
+                        let clean = console::strip_ansi_codes(stream_msg);
+                        let trimmed = clean.trim();
                         if !trimmed.is_empty() {
                             pb.set_message(trimmed.to_string());
                         }
