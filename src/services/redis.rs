@@ -42,7 +42,7 @@ impl Service for RedisService {
     }
 
     fn container_name(&self, _project: &str) -> String {
-        format!("bubble-boy-{}-redis", self.project_name)
+        format!("bubble-bot-{}-redis", self.project_name)
     }
 }
 
@@ -91,6 +91,6 @@ mod tests {
     #[test]
     fn container_name_includes_project() {
         let svc = default_service();
-        assert_eq!(svc.container_name("testproject"), "bubble-boy-testproject-redis");
+        assert_eq!(svc.container_name("testproject"), "bubble-bot-testproject-redis");
     }
 }

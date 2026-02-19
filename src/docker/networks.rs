@@ -60,7 +60,7 @@ impl NetworkManager {
             .any(|n| n.name.as_deref() == Some(name)))
     }
 
-    /// Detects and removes stale networks matching the `bubble-boy-<project>` prefix.
+    /// Detects and removes stale networks matching the `bubble-bot-<project>` prefix.
     /// Returns the number of networks removed.
     pub async fn cleanup_stale(&self, project_prefix: &str) -> Result<usize> {
         let filters: HashMap<String, Vec<String>> =
@@ -115,13 +115,13 @@ pub fn matches_stale_prefix(network_name: &str, prefix: &str) -> bool {
 }
 
 /// Derives the default network name from the current working directory.
-/// Returns `bubble-boy-<dir-name>` matching the container naming convention.
+/// Returns `bubble-bot-<dir-name>` matching the container naming convention.
 pub fn default_network_name() -> String {
     std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .map(|name| format!("bubble-boy-{name}"))
-        .unwrap_or_else(|| "bubble-boy-project".to_string())
+        .map(|name| format!("bubble-bot-{name}"))
+        .unwrap_or_else(|| "bubble-bot-project".to_string())
 }
 
 #[cfg(test)]
@@ -131,13 +131,13 @@ mod tests {
     #[test]
     fn default_network_name_has_prefix() {
         let name = default_network_name();
-        assert!(name.starts_with("bubble-boy-"));
+        assert!(name.starts_with("bubble-bot-"));
     }
 
     #[test]
     fn default_network_name_not_empty_suffix() {
         let name = default_network_name();
-        let suffix = name.strip_prefix("bubble-boy-").unwrap();
+        let suffix = name.strip_prefix("bubble-bot-").unwrap();
         assert!(!suffix.is_empty());
     }
 
@@ -151,28 +151,28 @@ mod tests {
 
     #[test]
     fn stale_prefix_matches_exact_network_name() {
-        assert!(matches_stale_prefix("bubble-boy-myproject", "bubble-boy-myproject"));
+        assert!(matches_stale_prefix("bubble-bot-myproject", "bubble-bot-myproject"));
     }
 
     #[test]
     fn stale_prefix_matches_network_with_suffix() {
         // Unlikely for networks but should handle `prefix-*` pattern
         assert!(matches_stale_prefix(
-            "bubble-boy-myproject-extra",
-            "bubble-boy-myproject"
+            "bubble-bot-myproject-extra",
+            "bubble-bot-myproject"
         ));
     }
 
     #[test]
     fn stale_prefix_rejects_different_project_network() {
         assert!(!matches_stale_prefix(
-            "bubble-boy-otherproject",
-            "bubble-boy-myproject"
+            "bubble-bot-otherproject",
+            "bubble-bot-myproject"
         ));
     }
 
     #[test]
     fn stale_prefix_rejects_non_bubble_boy_network() {
-        assert!(!matches_stale_prefix("my-network", "bubble-boy-myproject"));
+        assert!(!matches_stale_prefix("my-network", "bubble-bot-myproject"));
     }
 }

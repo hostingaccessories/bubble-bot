@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "bubble-boy", about = "Ephemeral Docker dev containers")]
+#[command(name = "bubble-bot", about = "Ephemeral Docker dev containers")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -55,7 +55,7 @@ pub enum Command {
     /// Show the resolved configuration
     Config,
 
-    /// Remove Bubble Boy images, networks, and optionally volumes
+    /// Remove Bubble Bot images, networks, and optionally volumes
     Clean {
         /// Also remove named volumes
         #[arg(long)]
@@ -128,20 +128,20 @@ mod tests {
 
     #[test]
     fn no_subcommand_defaults_to_shell() {
-        let cli = Cli::parse_from(["bubble-boy"]);
+        let cli = Cli::parse_from(["bubble-bot"]);
         assert!(cli.command.is_none());
         assert!(matches!(cli.command(), Command::Shell));
     }
 
     #[test]
     fn shell_subcommand() {
-        let cli = Cli::parse_from(["bubble-boy", "shell"]);
+        let cli = Cli::parse_from(["bubble-bot", "shell"]);
         assert!(matches!(cli.command(), Command::Shell));
     }
 
     #[test]
     fn claude_subcommand_with_trailing_args() {
-        let cli = Cli::parse_from(["bubble-boy", "claude", "--", "-p", "fix bug"]);
+        let cli = Cli::parse_from(["bubble-bot", "claude", "--", "-p", "fix bug"]);
         match cli.command() {
             Command::Claude { args } => {
                 assert_eq!(args, vec!["-p", "fix bug"]);
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn chief_subcommand_with_trailing_args() {
-        let cli = Cli::parse_from(["bubble-boy", "chief", "--", "--task", "deploy"]);
+        let cli = Cli::parse_from(["bubble-bot", "chief", "--", "--task", "deploy"]);
         match cli.command() {
             Command::Chief { args } => {
                 assert_eq!(args, vec!["--task", "deploy"]);
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn exec_subcommand_requires_cmd() {
-        let cli = Cli::parse_from(["bubble-boy", "exec", "--", "ls", "-la"]);
+        let cli = Cli::parse_from(["bubble-bot", "exec", "--", "ls", "-la"]);
         match cli.command() {
             Command::Exec { cmd } => {
                 assert_eq!(cmd, vec!["ls", "-la"]);
@@ -174,19 +174,19 @@ mod tests {
 
     #[test]
     fn build_subcommand() {
-        let cli = Cli::parse_from(["bubble-boy", "build"]);
+        let cli = Cli::parse_from(["bubble-bot", "build"]);
         assert!(matches!(cli.command(), Command::Build));
     }
 
     #[test]
     fn config_subcommand() {
-        let cli = Cli::parse_from(["bubble-boy", "config"]);
+        let cli = Cli::parse_from(["bubble-bot", "config"]);
         assert!(matches!(cli.command(), Command::Config));
     }
 
     #[test]
     fn clean_subcommand_default() {
-        let cli = Cli::parse_from(["bubble-boy", "clean"]);
+        let cli = Cli::parse_from(["bubble-bot", "clean"]);
         match cli.command() {
             Command::Clean { volumes } => assert!(!volumes),
             _ => panic!("expected Clean subcommand"),
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn clean_subcommand_with_volumes() {
-        let cli = Cli::parse_from(["bubble-boy", "clean", "--volumes"]);
+        let cli = Cli::parse_from(["bubble-bot", "clean", "--volumes"]);
         match cli.command() {
             Command::Clean { volumes } => assert!(volumes),
             _ => panic!("expected Clean subcommand"),
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn runtime_flags() {
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--with-php", "8.3",
             "--with-node", "22",
             "--with-rust",
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn service_flags() {
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--with-mysql",
             "--with-redis",
             "--with-postgres",
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn service_flags_with_versions() {
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--with-mysql", "8.4",
             "--with-postgres", "15",
         ]);
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn container_flags() {
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--network", "mynet",
             "--name", "mycontainer",
             "--shell", "bash",
@@ -260,14 +260,14 @@ mod tests {
 
     #[test]
     fn shell_defaults_to_bash() {
-        let cli = Cli::parse_from(["bubble-boy"]);
+        let cli = Cli::parse_from(["bubble-bot"]);
         assert_eq!(cli.container.shell, "bash");
     }
 
     #[test]
     fn combined_flags_with_subcommand() {
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--with-php", "8.3",
             "--with-node", "22",
             "--with-mysql",

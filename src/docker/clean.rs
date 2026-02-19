@@ -7,7 +7,7 @@ use bollard::network::ListNetworksOptions;
 use bollard::volume::ListVolumesOptions;
 use tracing::info;
 
-/// Handles cleanup of Bubble Boy Docker resources (images, networks, volumes).
+/// Handles cleanup of Bubble Bot Docker resources (images, networks, volumes).
 pub struct Cleaner {
     docker: Docker,
 }
@@ -17,8 +17,8 @@ impl Cleaner {
         Self { docker }
     }
 
-    /// Removes all `bubble-boy:*` images, `bubble-boy-*` networks, and optionally
-    /// `bubble-boy-*` named volumes. Prints what was removed.
+    /// Removes all `bubble-bot:*` images, `bubble-bot-*` networks, and optionally
+    /// `bubble-bot-*` named volumes. Prints what was removed.
     pub async fn clean(&self, remove_volumes: bool) -> Result<()> {
         let removed_images = self.remove_images().await?;
         let removed_networks = self.remove_networks().await?;
@@ -57,10 +57,10 @@ impl Cleaner {
         Ok(())
     }
 
-    /// Lists and removes all `bubble-boy:*` images. Returns the tags that were removed.
+    /// Lists and removes all `bubble-bot:*` images. Returns the tags that were removed.
     async fn remove_images(&self) -> Result<Vec<String>> {
         let filters: HashMap<String, Vec<String>> =
-            [("reference".to_string(), vec!["bubble-boy".to_string()])]
+            [("reference".to_string(), vec!["bubble-bot".to_string()])]
                 .into_iter()
                 .collect();
 
@@ -114,10 +114,10 @@ impl Cleaner {
         Ok(removed)
     }
 
-    /// Lists and removes all `bubble-boy-*` networks. Returns the names that were removed.
+    /// Lists and removes all `bubble-bot-*` networks. Returns the names that were removed.
     async fn remove_networks(&self) -> Result<Vec<String>> {
         let filters: HashMap<String, Vec<String>> =
-            [("name".to_string(), vec!["bubble-boy-".to_string()])]
+            [("name".to_string(), vec!["bubble-bot-".to_string()])]
                 .into_iter()
                 .collect();
 
@@ -131,7 +131,7 @@ impl Cleaner {
 
         for network in &networks {
             let name = match &network.name {
-                Some(n) if n.starts_with("bubble-boy-") => n.clone(),
+                Some(n) if n.starts_with("bubble-bot-") => n.clone(),
                 _ => continue,
             };
 
@@ -149,10 +149,10 @@ impl Cleaner {
         Ok(removed)
     }
 
-    /// Lists and removes all `bubble-boy-*` named volumes. Returns the names that were removed.
+    /// Lists and removes all `bubble-bot-*` named volumes. Returns the names that were removed.
     async fn remove_volumes(&self) -> Result<Vec<String>> {
         let filters: HashMap<String, Vec<String>> =
-            [("name".to_string(), vec!["bubble-boy-".to_string()])]
+            [("name".to_string(), vec!["bubble-bot-".to_string()])]
                 .into_iter()
                 .collect();
 
@@ -166,7 +166,7 @@ impl Cleaner {
         let mut removed = Vec::new();
 
         for volume in &volumes {
-            if !volume.name.starts_with("bubble-boy-") {
+            if !volume.name.starts_with("bubble-bot-") {
                 continue;
             }
 

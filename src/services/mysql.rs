@@ -16,7 +16,7 @@ impl MysqlService {
 
     /// Volume name for MySQL data persistence.
     fn volume_name(&self) -> String {
-        format!("bubble-boy-{}-mysql-data", self.project_name)
+        format!("bubble-bot-{}-mysql-data", self.project_name)
     }
 }
 
@@ -67,7 +67,7 @@ impl Service for MysqlService {
     }
 
     fn container_name(&self, _project: &str) -> String {
-        format!("bubble-boy-{}-mysql", self.project_name)
+        format!("bubble-bot-{}-mysql", self.project_name)
     }
 }
 
@@ -141,14 +141,14 @@ mod tests {
         let svc = default_service();
         assert_eq!(
             svc.volume().unwrap(),
-            "bubble-boy-testproject-mysql-data:/var/lib/mysql"
+            "bubble-bot-testproject-mysql-data:/var/lib/mysql"
         );
     }
 
     #[test]
     fn container_name_includes_project() {
         let svc = default_service();
-        assert_eq!(svc.container_name("testproject"), "bubble-boy-testproject-mysql");
+        assert_eq!(svc.container_name("testproject"), "bubble-bot-testproject-mysql");
     }
 
     #[test]

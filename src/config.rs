@@ -114,7 +114,7 @@ impl Config {
         }
 
         // Layer 2: project config
-        let project_path = PathBuf::from(".bubble-boy.toml");
+        let project_path = PathBuf::from(".bubble-bot.toml");
         if let Some(file_config) = load_from_file(&project_path)? {
             debug!("loaded project config from {}", project_path.display());
             config.merge(file_config);
@@ -232,7 +232,7 @@ impl Config {
 // -- File loading --
 
 fn global_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("bubble-boy").join("config.toml"))
+    dirs::config_dir().map(|d| d.join("bubble-bot").join("config.toml"))
 }
 
 fn load_from_file(path: &Path) -> Result<Option<Config>> {
@@ -448,7 +448,7 @@ mod tests {
         );
 
         let cli = Cli::parse_from([
-            "bubble-boy",
+            "bubble-bot",
             "--with-php",
             "8.3",
             "--name",
@@ -476,7 +476,7 @@ mod tests {
         );
 
         // CLI specifies --with-mysql 8.4 (overrides version only)
-        let cli = Cli::parse_from(["bubble-boy", "--with-mysql", "8.4"]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-mysql", "8.4"]);
         config.apply_cli(&cli);
 
         let mysql = config.services.mysql.unwrap();
@@ -518,7 +518,7 @@ mod tests {
         config.merge(project);
 
         // CLI overrides php to 8.3
-        let cli = Cli::parse_from(["bubble-boy", "--with-php", "8.3"]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-php", "8.3"]);
         config.apply_cli(&cli);
 
         // Final results
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn cli_redis_flag_enables_service() {
         let mut config = Config::default();
-        let cli = Cli::parse_from(["bubble-boy", "--with-redis"]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-redis"]);
         config.apply_cli(&cli);
         assert_eq!(config.services.redis, Some(true));
     }
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn cli_rust_flag_enables_runtime() {
         let mut config = Config::default();
-        let cli = Cli::parse_from(["bubble-boy", "--with-rust"]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-rust"]);
         config.apply_cli(&cli);
         assert_eq!(config.runtimes.rust, Some(true));
     }
@@ -592,7 +592,7 @@ mod tests {
             "#,
         );
         // CLI with explicit --shell zsh overrides config
-        let cli = Cli::parse_from(["bubble-boy", "--shell", "zsh"]);
+        let cli = Cli::parse_from(["bubble-bot", "--shell", "zsh"]);
         config.apply_cli(&cli);
         assert_eq!(config.container.shell.as_deref(), Some("zsh"));
     }
@@ -606,7 +606,7 @@ mod tests {
             "#,
         );
         // CLI with default --shell bash does not override config "fish"
-        let cli = Cli::parse_from(["bubble-boy"]);
+        let cli = Cli::parse_from(["bubble-bot"]);
         config.apply_cli(&cli);
         assert_eq!(config.container.shell.as_deref(), Some("fish"));
     }

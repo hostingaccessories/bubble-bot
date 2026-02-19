@@ -173,7 +173,7 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
         }
         Command::Clean { volumes } => {
             println!(
-                "(clean subcommand — would remove bubble-boy:* images and bubble-boy-* networks{})",
+                "(clean subcommand — would remove bubble-bot:* images and bubble-bot-* networks{})",
                 if *volumes { " and volumes" } else { "" }
             );
             return Ok(());

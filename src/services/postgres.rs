@@ -16,7 +16,7 @@ impl PostgresService {
 
     /// Volume name for PostgreSQL data persistence.
     fn volume_name(&self) -> String {
-        format!("bubble-boy-{}-postgres-data", self.project_name)
+        format!("bubble-bot-{}-postgres-data", self.project_name)
     }
 }
 
@@ -60,7 +60,7 @@ impl Service for PostgresService {
     }
 
     fn container_name(&self, _project: &str) -> String {
-        format!("bubble-boy-{}-postgres", self.project_name)
+        format!("bubble-bot-{}-postgres", self.project_name)
     }
 }
 
@@ -135,7 +135,7 @@ mod tests {
         let svc = default_service();
         assert_eq!(
             svc.volume().unwrap(),
-            "bubble-boy-testproject-postgres-data:/var/lib/postgresql/data"
+            "bubble-bot-testproject-postgres-data:/var/lib/postgresql/data"
         );
     }
 
@@ -144,7 +144,7 @@ mod tests {
         let svc = default_service();
         assert_eq!(
             svc.container_name("testproject"),
-            "bubble-boy-testproject-postgres"
+            "bubble-bot-testproject-postgres"
         );
     }
 

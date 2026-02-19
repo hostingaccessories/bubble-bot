@@ -36,7 +36,7 @@ pub trait Service {
 
     /// Container name for this service instance.
     fn container_name(&self, project: &str) -> String {
-        format!("bubble-boy-{project}-{}", self.name())
+        format!("bubble-bot-{project}-{}", self.name())
     }
 }
 

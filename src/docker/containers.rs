@@ -81,7 +81,7 @@ impl ContainerManager {
         Ok(())
     }
 
-    /// Detects and removes all stale containers matching the `bubble-boy-<project>` prefix.
+    /// Detects and removes all stale containers matching the `bubble-bot-<project>` prefix.
     /// This catches dev containers and service containers from crashed sessions.
     /// Returns the number of containers removed.
     pub async fn cleanup_stale(&self, project_prefix: &str) -> Result<usize> {
@@ -489,13 +489,13 @@ pub fn matches_stale_prefix(container_name: &str, prefix: &str) -> bool {
 }
 
 /// Derives the default container name from the current working directory.
-/// Returns `bubble-boy-<dir-name>` or `bubble-boy-project` as fallback.
+/// Returns `bubble-bot-<dir-name>` or `bubble-bot-project` as fallback.
 pub fn default_container_name() -> String {
     std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .map(|name| format!("bubble-boy-{name}"))
-        .unwrap_or_else(|| "bubble-boy-project".to_string())
+        .map(|name| format!("bubble-bot-{name}"))
+        .unwrap_or_else(|| "bubble-bot-project".to_string())
 }
 
 #[cfg(test)]
@@ -505,13 +505,13 @@ mod tests {
     #[test]
     fn default_container_name_has_prefix() {
         let name = default_container_name();
-        assert!(name.starts_with("bubble-boy-"));
+        assert!(name.starts_with("bubble-bot-"));
     }
 
     #[test]
     fn default_container_name_not_empty_suffix() {
         let name = default_container_name();
-        let suffix = name.strip_prefix("bubble-boy-").unwrap();
+        let suffix = name.strip_prefix("bubble-bot-").unwrap();
         assert!(!suffix.is_empty());
     }
 
@@ -519,25 +519,25 @@ mod tests {
     fn stale_prefix_matches_exact_container_name() {
         // Docker container names have leading `/`
         assert!(matches_stale_prefix(
-            "/bubble-boy-myproject",
-            "bubble-boy-myproject"
+            "/bubble-bot-myproject",
+            "bubble-bot-myproject"
         ));
     }
 
     #[test]
     fn stale_prefix_matches_service_container() {
-        // Service containers are named `bubble-boy-<project>-<service>`
+        // Service containers are named `bubble-bot-<project>-<service>`
         assert!(matches_stale_prefix(
-            "/bubble-boy-myproject-mysql",
-            "bubble-boy-myproject"
+            "/bubble-bot-myproject-mysql",
+            "bubble-bot-myproject"
         ));
         assert!(matches_stale_prefix(
-            "/bubble-boy-myproject-redis",
-            "bubble-boy-myproject"
+            "/bubble-bot-myproject-redis",
+            "bubble-bot-myproject"
         ));
         assert!(matches_stale_prefix(
-            "/bubble-boy-myproject-postgres",
-            "bubble-boy-myproject"
+            "/bubble-bot-myproject-postgres",
+            "bubble-bot-myproject"
         ));
     }
 
@@ -545,17 +545,17 @@ mod tests {
     fn stale_prefix_rejects_different_project() {
         // Should not match containers from a different project
         assert!(!matches_stale_prefix(
-            "/bubble-boy-otherproject",
-            "bubble-boy-myproject"
+            "/bubble-bot-otherproject",
+            "bubble-bot-myproject"
         ));
         assert!(!matches_stale_prefix(
-            "/bubble-boy-otherproject-mysql",
-            "bubble-boy-myproject"
+            "/bubble-bot-otherproject-mysql",
+            "bubble-bot-myproject"
         ));
     }
 
     #[test]
     fn stale_prefix_rejects_non_bubble_boy() {
-        assert!(!matches_stale_prefix("/some-other-container", "bubble-boy-myproject"));
+        assert!(!matches_stale_prefix("/some-other-container", "bubble-bot-myproject"));
     }
 }

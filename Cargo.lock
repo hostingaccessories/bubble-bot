@@ -154,7 +154,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bubble-boy"
+name = "bubble-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",

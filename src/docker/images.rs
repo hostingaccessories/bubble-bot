@@ -28,14 +28,14 @@ impl ImageBuilder {
     }
 
     /// Computes the content-hash tag for a rendered Dockerfile.
-    /// Returns `bubble-boy:<first-12-chars-of-sha256>`.
+    /// Returns `bubble-bot:<first-12-chars-of-sha256>`.
     pub fn compute_tag(dockerfile_content: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(dockerfile_content.as_bytes());
         let hash = hasher.finalize();
         let hex = format!("{hash:x}");
         let prefix = &hex[..12];
-        format!("bubble-boy:{prefix}")
+        format!("bubble-bot:{prefix}")
     }
 
     /// Checks whether an image with the given tag already exists locally.
@@ -184,9 +184,9 @@ mod tests {
     #[test]
     fn compute_tag_uses_first_12_hex_chars() {
         let tag = ImageBuilder::compute_tag("FROM ubuntu:24.04\n");
-        // Tag format: bubble-boy:<12-hex-chars>
-        assert!(tag.starts_with("bubble-boy:"));
-        let hash_part = tag.strip_prefix("bubble-boy:").unwrap();
+        // Tag format: bubble-bot:<12-hex-chars>
+        assert!(tag.starts_with("bubble-bot:"));
+        let hash_part = tag.strip_prefix("bubble-bot:").unwrap();
         assert_eq!(hash_part.len(), 12);
         assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));
     }
