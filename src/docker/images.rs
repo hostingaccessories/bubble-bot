@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use bollard::Docker;
 use bollard::image::{BuildImageOptions, ListImagesOptions};
+use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
-use tracing::info;
 
 use crate::templates::ContextFile;
 
@@ -73,14 +73,19 @@ impl ImageBuilder {
 
         // Check cache unless --no-cache
         if !no_cache && self.image_exists(&tag).await? {
-            info!(tag = %tag, "image cache hit — skipping build");
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{prefix} {msg}")
+                    .expect("invalid progress template"),
+            );
+            pb.set_prefix("✓");
+            pb.finish_with_message(format!("Image loaded from cache ({tag})"));
             return Ok(BuildResult {
                 tag,
                 cached: true,
             });
         }
-
-        info!(tag = %tag, "building image");
 
         // Create a tar archive with the Dockerfile and context files
         let tar_bytes = Self::create_build_context(dockerfile_content, context_files)?;
@@ -91,6 +96,15 @@ impl ImageBuilder {
             forcerm: true,
             ..Default::default()
         };
+
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("invalid progress template"),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(120));
+        pb.set_message(format!("Building image {tag}..."));
 
         use futures_util::StreamExt;
 
@@ -106,20 +120,22 @@ impl ImageBuilder {
                     if let Some(stream_msg) = &output.stream {
                         let trimmed = stream_msg.trim_end();
                         if !trimmed.is_empty() {
-                            info!("{}", trimmed);
+                            pb.set_message(trimmed.to_string());
                         }
                     }
                     if let Some(error) = &output.error {
+                        pb.finish_with_message(format!("Build failed: {error}"));
                         anyhow::bail!("Docker build error: {error}");
                     }
                 }
                 Err(e) => {
+                    pb.finish_with_message(format!("Build failed: {e}"));
                     anyhow::bail!("Docker build stream error: {e}");
                 }
             }
         }
 
-        info!(tag = %tag, "image build complete");
+        pb.finish_with_message(format!("Image built successfully ({tag})"));
 
         Ok(BuildResult {
             tag,
