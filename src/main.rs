@@ -116,6 +116,7 @@ async fn main() -> Result<()> {
         Command::Shell => run_shell(&cli, &config).await,
         Command::Claude { args } => run_claude(&cli, &config, &args).await,
         Command::Chief { args } => run_chief(&cli, &config, &args).await,
+        Command::Exec { cmd } => run_exec(&cli, &config, &cmd).await,
         Command::Config => run_config(&config),
         Command::Clean { volumes } => run_clean(volumes).await,
         _ => {
@@ -552,6 +553,128 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Launch Claude Code (blocking)
     let exit_code = container_mgr.exec_interactive_command(&container_id, &cmd)?;
+
+    // Normal exit — cancel signal handler and clean up
+    signal_handle.abort();
+
+    // Run pre_stop hooks
+    hook_runner.run_pre_stop();
+
+    // Cleanup on exit
+    cleanup_state.lock().await.cleanup().await;
+
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+
+    Ok(())
+}
+
+async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
+
+    // Resolve container and network names
+    let container_name = config
+        .container
+        .name
+        .clone()
+        .unwrap_or_else(default_container_name);
+    let network_name = config
+        .container
+        .network
+        .clone()
+        .unwrap_or_else(default_network_name);
+
+    // Detect and clean up stale containers/networks from previous sessions
+    cleanup_stale_resources(&docker, &container_name).await?;
+
+    // Render Dockerfile
+    let renderer = TemplateRenderer::new()?;
+    let render_result = renderer.render(config)?;
+
+    // Build or use cached image
+    let image_builder = ImageBuilder::new(docker.clone());
+    let build_result = image_builder
+        .build(
+            &render_result.dockerfile,
+            &render_result.context_files,
+            cli.container.no_cache,
+        )
+        .await?;
+    info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
+
+    // Get project directory
+    let project_dir = std::env::current_dir()?
+        .to_string_lossy()
+        .to_string();
+
+    // Resolve auth token
+    let mut env_vars = Vec::new();
+    if let Some(token) = resolve_oauth_token()? {
+        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
+    }
+
+    // Collect service env vars for the dev container
+    let project = project_name();
+    let services = collect_services(config, &project);
+    env_vars.extend(collect_service_env_vars(&services));
+
+    // Set up shared cleanup state and signal handler
+    let cleanup_state = Arc::new(Mutex::new(CleanupState {
+        docker: Some(docker.clone()),
+        network_name: Some(network_name.clone()),
+        ..Default::default()
+    }));
+    let signal_handle = spawn_signal_handler(Arc::clone(&cleanup_state));
+
+    // Create bridge network
+    let network_mgr = NetworkManager::new(docker.clone());
+    network_mgr.ensure_network(&network_name).await?;
+
+    // Container lifecycle
+    let container_mgr = ContainerManager::new(docker);
+
+    // Start service containers
+    let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Register service containers for signal cleanup
+    cleanup_state.lock().await.service_container_ids = service_ids.clone();
+
+    // Clean up any existing dev container with the same name
+    container_mgr.cleanup_existing(&container_name).await?;
+
+    // Collect dotfile mounts if configured
+    let extra_binds = if config.shell.mount_configs {
+        collect_dotfile_mounts()
+    } else {
+        Vec::new()
+    };
+
+    let opts = ContainerOpts {
+        image_tag: build_result.tag,
+        container_name: container_name.clone(),
+        shell: "zsh".to_string(),
+        project_dir,
+        env_vars,
+        network: Some(network_name.clone()),
+        extra_binds,
+    };
+
+    let container_id = container_mgr.create_and_start(&opts).await?;
+
+    // Register dev container for signal cleanup
+    cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
+    // Run post_start hooks
+    let hook_runner = HookRunner::new(&container_id, &config.hooks);
+    hook_runner.run_post_start();
+
+    // Build command
+    let cmd_refs: Vec<&str> = cmd.iter().map(|s| s.as_str()).collect();
+
+    // Run command (non-interactive)
+    let exit_code = container_mgr.exec_command(&container_id, &cmd_refs)?;
 
     // Normal exit — cancel signal handler and clean up
     signal_handle.abort();
