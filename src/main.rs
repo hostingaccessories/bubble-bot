@@ -23,6 +23,7 @@ use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
 use hooks::HookRunner;
 use services::{Service, collect_service_env_vars, collect_services};
+use shell::{collect_dotfile_mounts, resolve_shell};
 use templates::TemplateRenderer;
 
 #[tokio::main]
@@ -146,6 +147,13 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
+    // Collect dotfile mounts if configured
+    let extra_binds = if config.shell.mount_configs {
+        collect_dotfile_mounts()
+    } else {
+        Vec::new()
+    };
+
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
@@ -153,6 +161,7 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
+        extra_binds,
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
@@ -244,6 +253,13 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
+    // Collect dotfile mounts if configured
+    let extra_binds = if config.shell.mount_configs {
+        collect_dotfile_mounts()
+    } else {
+        Vec::new()
+    };
+
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
@@ -251,6 +267,7 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
+        extra_binds,
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
@@ -298,12 +315,8 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         .clone()
         .unwrap_or_else(default_network_name);
 
-    // Resolve shell
-    let shell = config
-        .container
-        .shell
-        .clone()
-        .unwrap_or_else(|| "zsh".to_string());
+    // Resolve shell (config > $SHELL > bash fallback)
+    let shell = resolve_shell(config.container.shell.as_deref());
 
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
@@ -349,6 +362,13 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
+    // Collect dotfile mounts if configured
+    let extra_binds = if config.shell.mount_configs {
+        collect_dotfile_mounts()
+    } else {
+        Vec::new()
+    };
+
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
@@ -356,6 +376,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
+        extra_binds,
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;

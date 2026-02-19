@@ -25,6 +25,8 @@ pub struct ContainerOpts {
     pub project_dir: String,
     pub env_vars: Vec<String>,
     pub network: Option<String>,
+    /// Additional read-only bind mounts (e.g., dotfiles) in `host:container:ro` format.
+    pub extra_binds: Vec<String>,
 }
 
 impl ContainerManager {
@@ -86,9 +88,11 @@ impl ContainerManager {
         let user = format!("{uid}:{gid}");
 
         let bind = format!("{}:/workspace", opts.project_dir);
+        let mut binds = vec![bind];
+        binds.extend(opts.extra_binds.clone());
 
         let host_config = HostConfig {
-            binds: Some(vec![bind]),
+            binds: Some(binds),
             network_mode: opts.network.clone(),
             ..Default::default()
         };
