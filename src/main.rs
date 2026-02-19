@@ -37,6 +37,10 @@ async fn main() -> Result<()> {
     let config = Config::load(&cli)?;
     let command = cli.command();
 
+    if cli.container.dry_run {
+        return run_dry_run(&config, &command);
+    }
+
     match command {
         Command::Shell => run_shell(&cli, &config).await,
         Command::Claude { args } => run_claude(&cli, &config, &args).await,
@@ -56,6 +60,139 @@ fn project_name() -> String {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "project".to_string())
+}
+
+/// Prints a dry-run summary: resolved config, generated Dockerfile, and Docker
+/// commands that would be executed — without creating any containers, networks,
+/// or images.
+fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
+    // Resolved config
+    let config_output = toml::to_string_pretty(config)?;
+    println!("=== Resolved Config ===\n{config_output}");
+
+    // Determine the exec command and whether Chief layer is needed
+    let (exec_cmd, install_chief) = match command {
+        Command::Shell => {
+            let shell = resolve_shell(config.container.shell.as_deref());
+            (format!("docker exec -it <container> {shell}"), false)
+        }
+        Command::Claude { args } => {
+            let mut parts = vec![
+                "docker exec -it <container> claude --permission-mode bypassPermissions".to_string(),
+            ];
+            for arg in args {
+                parts.push(arg.clone());
+            }
+            (parts.join(" "), false)
+        }
+        Command::Chief { args } => {
+            let mut parts = vec!["docker exec -it <container> chief".to_string()];
+            for arg in args {
+                parts.push(arg.clone());
+            }
+            (parts.join(" "), true)
+        }
+        Command::Exec { cmd } => {
+            let mut parts = vec!["docker exec <container>".to_string()];
+            for c in cmd {
+                parts.push(c.clone());
+            }
+            (parts.join(" "), false)
+        }
+        Command::Build => ("(build only — no container started)".to_string(), false),
+        Command::Config => {
+            println!("(config subcommand — no Docker operations)");
+            return Ok(());
+        }
+        Command::Clean { volumes } => {
+            println!(
+                "(clean subcommand — would remove bubble-boy:* images and bubble-boy-* networks{})",
+                if *volumes { " and volumes" } else { "" }
+            );
+            return Ok(());
+        }
+    };
+
+    // Render Dockerfile
+    let renderer = TemplateRenderer::new()?;
+    let render_result = renderer.render_with_options(config, install_chief)?;
+    let image_tag = ImageBuilder::compute_tag(&render_result.dockerfile);
+
+    println!("=== Generated Dockerfile ===\n{}", render_result.dockerfile);
+
+    // Docker commands
+    let container_name = config
+        .container
+        .name
+        .clone()
+        .unwrap_or_else(default_container_name);
+    let network_name = config
+        .container
+        .network
+        .clone()
+        .unwrap_or_else(default_network_name);
+    let project_dir = std::env::current_dir()?
+        .to_string_lossy()
+        .to_string();
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    println!("=== Docker Commands ===");
+    println!("Image tag: {image_tag}");
+    println!("docker build -t {image_tag} .");
+    println!("docker network create {network_name}");
+
+    // Service containers
+    let project = project_name();
+    let services = collect_services(config, &project);
+    for service in &services {
+        let svc_name = service.container_name(&project);
+        println!(
+            "docker run -d --name {svc_name} --network {network_name} {}",
+            service.image()
+        );
+    }
+
+    // Dev container
+    let mut docker_run = format!(
+        "docker run -d --name {container_name} --user {uid}:{gid} -v {project_dir}:/workspace --network {network_name}"
+    );
+
+    // Dotfile mounts
+    if config.shell.mount_configs {
+        for mount in collect_dotfile_mounts() {
+            docker_run.push_str(&format!(" -v {mount}"));
+        }
+    }
+
+    // Env vars (service env only — token redacted)
+    let service_envs = collect_service_env_vars(&services);
+    for env in &service_envs {
+        docker_run.push_str(&format!(" -e {env}"));
+    }
+    docker_run.push_str(" -e CLAUDE_CODE_OAUTH_TOKEN=<token>");
+
+    docker_run.push_str(&format!(" {image_tag} sleep infinity"));
+    println!("{docker_run}");
+
+    // Exec command
+    println!("{exec_cmd}");
+
+    // Hooks
+    if !config.hooks.post_start.is_empty() {
+        println!("\npost_start hooks:");
+        for hook in &config.hooks.post_start {
+            println!("  docker exec <container> sh -c {hook:?}");
+        }
+    }
+    if !config.hooks.pre_stop.is_empty() {
+        println!("\npre_stop hooks:");
+        for hook in &config.hooks.pre_stop {
+            println!("  docker exec <container> sh -c {hook:?}");
+        }
+    }
+
+    Ok(())
 }
 
 /// Starts all configured service containers on the given network.
