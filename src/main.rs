@@ -18,6 +18,7 @@ use tracing::info;
 use auth::resolve_oauth_token;
 use cli::{Cli, Command};
 use config::Config;
+use docker::clean::Cleaner;
 use docker::containers::{ContainerManager, ContainerOpts, default_container_name};
 use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
         Command::Claude { args } => run_claude(&cli, &config, &args).await,
         Command::Chief { args } => run_chief(&cli, &config, &args).await,
         Command::Config => run_config(&config),
+        Command::Clean { volumes } => run_clean(volumes).await,
         _ => {
             info!("subcommand not yet implemented");
             Ok(())
@@ -92,6 +94,14 @@ fn run_config(config: &Config) -> Result<()> {
     let output = toml::to_string_pretty(config)?;
     print!("{output}");
     Ok(())
+}
+
+async fn run_clean(remove_volumes: bool) -> Result<()> {
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
+
+    let cleaner = Cleaner::new(docker);
+    cleaner.clean(remove_volumes).await
 }
 
 async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
