@@ -35,10 +35,7 @@ impl Service for RedisService {
     }
 
     fn readiness_cmd(&self) -> Vec<String> {
-        vec![
-            "redis-cli".to_string(),
-            "ping".to_string(),
-        ]
+        vec!["redis-cli".to_string(), "ping".to_string()]
     }
 
     fn container_name(&self, _project: &str) -> String {
@@ -91,6 +88,9 @@ mod tests {
     #[test]
     fn container_name_includes_project() {
         let svc = default_service();
-        assert_eq!(svc.container_name("testproject"), "bubble-bot-testproject-redis");
+        assert_eq!(
+            svc.container_name("testproject"),
+            "bubble-bot-testproject-redis"
+        );
     }
 }

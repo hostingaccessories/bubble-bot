@@ -206,10 +206,13 @@ mod tests {
     fn runtime_flags() {
         let cli = Cli::parse_from([
             "bubble-bot",
-            "--with-php", "8.3",
-            "--with-node", "22",
+            "--with-php",
+            "8.3",
+            "--with-node",
+            "22",
             "--with-rust",
-            "--with-go", "1.23",
+            "--with-go",
+            "1.23",
         ]);
         assert_eq!(cli.runtime.php.as_deref(), Some("8.3"));
         assert_eq!(cli.runtime.node.as_deref(), Some("22"));
@@ -232,11 +235,7 @@ mod tests {
 
     #[test]
     fn service_flags_with_versions() {
-        let cli = Cli::parse_from([
-            "bubble-bot",
-            "--with-mysql", "8.4",
-            "--with-postgres", "15",
-        ]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-mysql", "8.4", "--with-postgres", "15"]);
         assert_eq!(cli.service.mysql.as_deref(), Some("8.4"));
         assert_eq!(cli.service.postgres.as_deref(), Some("15"));
     }
@@ -245,9 +244,12 @@ mod tests {
     fn container_flags() {
         let cli = Cli::parse_from([
             "bubble-bot",
-            "--network", "mynet",
-            "--name", "mycontainer",
-            "--shell", "bash",
+            "--network",
+            "mynet",
+            "--name",
+            "mycontainer",
+            "--shell",
+            "bash",
             "--no-cache",
             "--dry-run",
         ]);
@@ -268,8 +270,10 @@ mod tests {
     fn combined_flags_with_subcommand() {
         let cli = Cli::parse_from([
             "bubble-bot",
-            "--with-php", "8.3",
-            "--with-node", "22",
+            "--with-php",
+            "8.3",
+            "--with-node",
+            "22",
             "--with-mysql",
             "--with-redis",
             "--dry-run",

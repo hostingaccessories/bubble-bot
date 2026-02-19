@@ -62,7 +62,11 @@ impl<'a> TemplateRenderer<'a> {
     }
 
     /// Renders the full Dockerfile with optional Chief installation.
-    pub fn render_with_options(&self, config: &Config, install_chief: bool) -> Result<RenderResult> {
+    pub fn render_with_options(
+        &self,
+        config: &Config,
+        install_chief: bool,
+    ) -> Result<RenderResult> {
         let tmpl = self.env.get_template("base")?;
         let mut rendered = tmpl.render(context! {})?;
 
@@ -329,7 +333,10 @@ mod tests {
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
-        assert!(php_pos < node_pos, "PHP layer should come before Node layer");
+        assert!(
+            php_pos < node_pos,
+            "PHP layer should come before Node layer"
+        );
     }
 
     #[test]
@@ -369,7 +376,10 @@ mod tests {
 
         let node_pos = output.find("nodesource").unwrap();
         let rust_pos = output.find("rustup.rs").unwrap();
-        assert!(node_pos < rust_pos, "Node layer should come before Rust layer");
+        assert!(
+            node_pos < rust_pos,
+            "Node layer should come before Rust layer"
+        );
     }
 
     #[test]
@@ -481,7 +491,10 @@ mod tests {
 
         let result1 = renderer.render(&config1).unwrap();
         let result2 = renderer.render(&config2).unwrap();
-        assert_ne!(result1.dockerfile, result2.dockerfile, "Adding a runtime should change the Dockerfile");
+        assert_ne!(
+            result1.dockerfile, result2.dockerfile,
+            "Adding a runtime should change the Dockerfile"
+        );
     }
 
     #[test]
@@ -492,7 +505,10 @@ mod tests {
 
         let result1 = renderer.render(&config1).unwrap();
         let result2 = renderer.render(&config2).unwrap();
-        assert_ne!(result1.dockerfile, result2.dockerfile, "Changing a version should change the Dockerfile");
+        assert_ne!(
+            result1.dockerfile, result2.dockerfile,
+            "Changing a version should change the Dockerfile"
+        );
     }
 
     #[test]
@@ -516,7 +532,10 @@ mod tests {
 
         let php_pos = output.find("php8.3-cli").unwrap();
         let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
-        assert!(php_pos < entrypoint_pos, "Entrypoint should come after runtime layers");
+        assert!(
+            php_pos < entrypoint_pos,
+            "Entrypoint should come after runtime layers"
+        );
     }
 
     #[test]
@@ -574,7 +593,10 @@ mod tests {
 
         let chief_pos = output.find("MiniCodeMonkey/chief").unwrap();
         let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
-        assert!(chief_pos < entrypoint_pos, "Chief layer should come before entrypoint");
+        assert!(
+            chief_pos < entrypoint_pos,
+            "Chief layer should come before entrypoint"
+        );
     }
 
     #[test]
@@ -606,6 +628,9 @@ mod tests {
 
         let without_chief = renderer.render(&config).unwrap();
         let with_chief = renderer.render_with_options(&config, true).unwrap();
-        assert_ne!(without_chief.dockerfile, with_chief.dockerfile, "Chief layer should change the Dockerfile");
+        assert_ne!(
+            without_chief.dockerfile, with_chief.dockerfile,
+            "Chief layer should change the Dockerfile"
+        );
     }
 }

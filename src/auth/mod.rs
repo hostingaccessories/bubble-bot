@@ -41,10 +41,7 @@ pub fn resolve_oauth_token() -> Result<Option<String>> {
 /// Always includes `hasCompletedOnboarding: true` and `theme: "dark-daltonized"`.
 pub fn resolve_claude_config() -> Result<String> {
     let mut config = Map::new();
-    config.insert(
-        "hasCompletedOnboarding".to_string(),
-        Value::Bool(true),
-    );
+    config.insert("hasCompletedOnboarding".to_string(), Value::Bool(true));
     config.insert(
         "theme".to_string(),
         Value::String("dark-daltonized".to_string()),

@@ -43,10 +43,9 @@ impl NetworkManager {
 
     /// Checks whether a network with the given name exists.
     pub async fn network_exists(&self, name: &str) -> Result<bool> {
-        let filters: HashMap<String, Vec<String>> =
-            [("name".to_string(), vec![name.to_string()])]
-                .into_iter()
-                .collect();
+        let filters: HashMap<String, Vec<String>> = [("name".to_string(), vec![name.to_string()])]
+            .into_iter()
+            .collect();
 
         let networks = self
             .docker
@@ -55,9 +54,7 @@ impl NetworkManager {
             .context("failed to list networks")?;
 
         // Docker name filter returns partial matches — check for exact match
-        Ok(networks
-            .iter()
-            .any(|n| n.name.as_deref() == Some(name)))
+        Ok(networks.iter().any(|n| n.name.as_deref() == Some(name)))
     }
 
     /// Detects and removes stale networks matching the `bubble-bot-<project>` prefix.
@@ -151,7 +148,10 @@ mod tests {
 
     #[test]
     fn stale_prefix_matches_exact_network_name() {
-        assert!(matches_stale_prefix("bubble-bot-myproject", "bubble-bot-myproject"));
+        assert!(matches_stale_prefix(
+            "bubble-bot-myproject",
+            "bubble-bot-myproject"
+        ));
     }
 
     #[test]

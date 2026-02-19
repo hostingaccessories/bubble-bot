@@ -148,7 +148,10 @@ mod tests {
     #[test]
     fn container_name_includes_project() {
         let svc = default_service();
-        assert_eq!(svc.container_name("testproject"), "bubble-bot-testproject-mysql");
+        assert_eq!(
+            svc.container_name("testproject"),
+            "bubble-bot-testproject-mysql"
+        );
     }
 
     #[test]

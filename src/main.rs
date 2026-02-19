@@ -78,9 +78,8 @@ impl CleanupState {
 fn spawn_signal_handler(state: Arc<Mutex<CleanupState>>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
 
         tokio::select! {
             _ = ctrl_c => {
@@ -145,7 +144,8 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
         }
         Command::Claude { args } => {
             let mut parts = vec![
-                "docker exec -it <container> claude --permission-mode bypassPermissions".to_string(),
+                "docker exec -it <container> claude --permission-mode bypassPermissions"
+                    .to_string(),
             ];
             for arg in args {
                 parts.push(arg.clone());
@@ -198,9 +198,7 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
         .network
         .clone()
         .unwrap_or_else(default_network_name);
-    let project_dir = std::env::current_dir()?
-        .to_string_lossy()
-        .to_string();
+    let project_dir = std::env::current_dir()?.to_string_lossy().to_string();
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
@@ -266,8 +264,7 @@ async fn cleanup_stale_resources(docker: &Docker, container_name: &str) -> Resul
     if containers_removed > 0 || networks_removed > 0 {
         info!(
             containers_removed,
-            networks_removed,
-            "cleaned up stale resources from previous session"
+            networks_removed, "cleaned up stale resources from previous session"
         );
     }
 
@@ -367,9 +364,7 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
 
     // Get project directory
-    let project_dir = std::env::current_dir()?
-        .to_string_lossy()
-        .to_string();
+    let project_dir = std::env::current_dir()?.to_string_lossy().to_string();
 
     // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
@@ -491,9 +486,7 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
 
     // Get project directory
-    let project_dir = std::env::current_dir()?
-        .to_string_lossy()
-        .to_string();
+    let project_dir = std::env::current_dir()?.to_string_lossy().to_string();
 
     // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
@@ -615,9 +608,7 @@ async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
     info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
 
     // Get project directory
-    let project_dir = std::env::current_dir()?
-        .to_string_lossy()
-        .to_string();
+    let project_dir = std::env::current_dir()?.to_string_lossy().to_string();
 
     // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;
@@ -744,9 +735,7 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     info!(tag = %build_result.tag, cached = build_result.cached, "image ready");
 
     // Get project directory
-    let project_dir = std::env::current_dir()?
-        .to_string_lossy()
-        .to_string();
+    let project_dir = std::env::current_dir()?.to_string_lossy().to_string();
 
     // Resolve auth token and claude config (written to container after start, not via env)
     let oauth_token = resolve_oauth_token()?;

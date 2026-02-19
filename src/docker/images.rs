@@ -81,10 +81,7 @@ impl ImageBuilder {
             );
             pb.set_prefix("✓");
             pb.finish_with_message(format!("Image loaded from cache ({tag})"));
-            return Ok(BuildResult {
-                tag,
-                cached: true,
-            });
+            return Ok(BuildResult { tag, cached: true });
         }
 
         // Create a tar archive with the Dockerfile and context files
@@ -138,10 +135,7 @@ impl ImageBuilder {
 
         pb.finish_with_message(format!("Image built successfully ({tag})"));
 
-        Ok(BuildResult {
-            tag,
-            cached: false,
-        })
+        Ok(BuildResult { tag, cached: false })
     }
 
     /// Creates an in-memory tar archive containing the Dockerfile and any
@@ -217,10 +211,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
 
         let entry = entries.into_iter().next().unwrap().unwrap();
-        assert_eq!(
-            entry.path().unwrap().to_str().unwrap(),
-            "Dockerfile"
-        );
+        assert_eq!(entry.path().unwrap().to_str().unwrap(), "Dockerfile");
     }
 
     #[test]

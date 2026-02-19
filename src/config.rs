@@ -447,13 +447,7 @@ mod tests {
             "#,
         );
 
-        let cli = Cli::parse_from([
-            "bubble-bot",
-            "--with-php",
-            "8.3",
-            "--name",
-            "cli-name",
-        ]);
+        let cli = Cli::parse_from(["bubble-bot", "--with-php", "8.3", "--name", "cli-name"]);
         config.apply_cli(&cli);
 
         // CLI overrides php

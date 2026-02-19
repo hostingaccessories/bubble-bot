@@ -198,17 +198,26 @@ mod tests {
         // Verify consistent naming: DB_* for databases, REDIS_* for Redis
         let mysql = MysqlService::new(MysqlConfig::default(), "test".to_string());
         for var in mysql.dev_env() {
-            assert!(var.starts_with("DB_"), "MySQL env var should start with DB_: {var}");
+            assert!(
+                var.starts_with("DB_"),
+                "MySQL env var should start with DB_: {var}"
+            );
         }
 
         let redis = RedisService::new("test".to_string());
         for var in redis.dev_env() {
-            assert!(var.starts_with("REDIS_"), "Redis env var should start with REDIS_: {var}");
+            assert!(
+                var.starts_with("REDIS_"),
+                "Redis env var should start with REDIS_: {var}"
+            );
         }
 
         let pg = PostgresService::new(PostgresConfig::default(), "test".to_string());
         for var in pg.dev_env() {
-            assert!(var.starts_with("DB_"), "Postgres env var should start with DB_: {var}");
+            assert!(
+                var.starts_with("DB_"),
+                "Postgres env var should start with DB_: {var}"
+            );
         }
     }
 }

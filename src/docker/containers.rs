@@ -36,10 +36,9 @@ impl ContainerManager {
 
     /// Detects and removes an existing container with the given name.
     pub async fn cleanup_existing(&self, name: &str) -> Result<()> {
-        let filters: HashMap<String, Vec<String>> =
-            [("name".to_string(), vec![name.to_string()])]
-                .into_iter()
-                .collect();
+        let filters: HashMap<String, Vec<String>> = [("name".to_string(), vec![name.to_string()])]
+            .into_iter()
+            .collect();
 
         let containers = self
             .docker
@@ -266,7 +265,9 @@ impl ContainerManager {
             stdin.write_all(credentials.as_bytes())?;
         }
 
-        let status = child.wait().context("failed to wait for credentials write")?;
+        let status = child
+            .wait()
+            .context("failed to wait for credentials write")?;
         if !status.success() {
             anyhow::bail!("failed to write credentials to container");
         }
@@ -282,7 +283,11 @@ impl ContainerManager {
 
         let mut child = Command::new("docker")
             .args([
-                "exec", "-i", container_id, "sh", "-c",
+                "exec",
+                "-i",
+                container_id,
+                "sh",
+                "-c",
                 "cat > \"${HOME}/.claude.json\"",
             ])
             .stdin(std::process::Stdio::piped())
@@ -295,7 +300,9 @@ impl ContainerManager {
             stdin.write_all(config.as_bytes())?;
         }
 
-        let status = child.wait().context("failed to wait for claude config write")?;
+        let status = child
+            .wait()
+            .context("failed to wait for claude config write")?;
         if !status.success() {
             anyhow::bail!("failed to write claude config to container");
         }
@@ -450,20 +457,14 @@ impl ContainerManager {
 
             match status {
                 Ok(s) if s.success() => {
-                    info!(
-                        service = service.name(),
-                        attempt,
-                        "service is ready"
-                    );
+                    info!(service = service.name(), attempt, "service is ready");
                     return Ok(());
                 }
                 _ => {
                     if attempt < max_retries {
                         info!(
                             service = service.name(),
-                            attempt,
-                            max_retries,
-                            "service not ready, retrying..."
+                            attempt, max_retries, "service not ready, retrying..."
                         );
                         std::thread::sleep(std::time::Duration::from_secs(interval_secs));
                     }
@@ -556,6 +557,9 @@ mod tests {
 
     #[test]
     fn stale_prefix_rejects_non_bubble_boy() {
-        assert!(!matches_stale_prefix("/some-other-container", "bubble-bot-myproject"));
+        assert!(!matches_stale_prefix(
+            "/some-other-container",
+            "bubble-bot-myproject"
+        ));
     }
 }
