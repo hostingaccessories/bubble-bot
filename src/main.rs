@@ -118,11 +118,8 @@ async fn main() -> Result<()> {
         Command::Chief { args } => run_chief(&cli, &config, &args).await,
         Command::Exec { cmd } => run_exec(&cli, &config, &cmd).await,
         Command::Config => run_config(&config),
+        Command::Build => run_build(&config).await,
         Command::Clean { volumes } => run_clean(volumes).await,
-        _ => {
-            info!("subcommand not yet implemented");
-            Ok(())
-        }
     }
 }
 
@@ -311,6 +308,29 @@ async fn start_services(
 fn run_config(config: &Config) -> Result<()> {
     let output = toml::to_string_pretty(config)?;
     print!("{output}");
+    Ok(())
+}
+
+async fn run_build(config: &Config) -> Result<()> {
+    let docker = Docker::connect_with_local_defaults()
+        .map_err(|e| anyhow::anyhow!("failed to connect to Docker: {e}"))?;
+
+    // Render Dockerfile
+    let renderer = TemplateRenderer::new()?;
+    let render_result = renderer.render(config)?;
+
+    // Force build regardless of cache
+    let image_builder = ImageBuilder::new(docker);
+    let build_result = image_builder
+        .build(
+            &render_result.dockerfile,
+            &render_result.context_files,
+            true,
+        )
+        .await?;
+
+    println!("Image tag: {}", build_result.tag);
+
     Ok(())
 }
 
