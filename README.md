@@ -7,17 +7,33 @@ content-hash-cached images, starts service containers (MySQL, PostgreSQL,
 Redis), and drops you into an interactive dev container with Claude Code
 ready to go.
 
+## Platform Support
+
+macOS and Linux only.
+
 ## Requirements
 
 - Docker (running locally)
 - Rust 1.85+ (to build from source)
 - macOS (for Keychain-based OAuth token resolution; manual token export works
-  on any platform)
+  on Linux)
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
 ```bash
-git clone https://github.com/yourorg/bubble-bot.git
+brew install hostingaccessories/brews/bubble-bot
+```
+
+### Pre-built Binaries
+
+Download a binary from the [GitHub releases page](https://github.com/hostingaccessories/bubble-bot/releases).
+
+### From Source
+
+```bash
+git clone https://github.com/hostingaccessories/bubble-bot.git
 cd bubble-bot
 make release
 cp target/release/bubble-bot /usr/local/bin/
