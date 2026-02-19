@@ -145,6 +145,25 @@ impl ContainerManager {
         Ok(status.code().unwrap_or(1))
     }
 
+    /// Launches an interactive command inside the container via `docker exec -it`.
+    /// This is a blocking call that inherits stdio.
+    pub fn exec_interactive_command(&self, container_id: &str, cmd: &[&str]) -> Result<i32> {
+        info!(container = %container_id, ?cmd, "launching interactive command");
+
+        let mut args = vec!["exec", "-it", container_id];
+        args.extend(cmd);
+
+        let status = Command::new("docker")
+            .args(&args)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .context("failed to exec command in container")?;
+
+        Ok(status.code().unwrap_or(1))
+    }
+
     /// Stops and removes the container.
     pub async fn stop_and_remove(&self, container_id: &str) -> Result<()> {
         info!(id = %container_id, "stopping container");
