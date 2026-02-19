@@ -1,0 +1,323 @@
+.TH BUBBLE-BOT 1 "2026-02-18" "bubble-bot 0.1.0" "User Commands"
+.SH NAME
+bubble-bot \- ephemeral Docker dev containers with Claude Code
+.SH SYNOPSIS
+.B bubble-bot
+.RI [ command ]
+.RI [ options ]
+.SH DESCRIPTION
+.B bubble-bot
+spins up ephemeral Docker dev containers pre-configured with Claude Code.
+It resolves configuration from global and project files, renders Dockerfiles
+from templates, builds content-hash-cached images, starts service containers
+(MySQL, PostgreSQL, Redis), and drops you into an interactive dev container.
+.PP
+If no command is given,
+.B shell
+is assumed.
+.SH COMMANDS
+.TP
+.B shell
+Open an interactive shell in the dev container. This is the default command
+when none is specified.
+.TP
+.B claude \fR[\fB\-\-\fR \fIARGS\fR...]
+Run Claude Code inside the container with
+.BR \-\-permission\-mode\ bypassPermissions .
+Any arguments after
+.B \-\-
+are passed through to Claude Code.
+.TP
+.B chief \fR[\fB\-\-\fR \fIARGS\fR...]
+Run Chief (autonomous Claude Code task runner) inside the container. Installs
+an additional Dockerfile layer for the Chief binary. Any arguments after
+.B \-\-
+are passed through to Chief.
+.TP
+.B exec \fIcommand\fR [\fIargs\fR...]
+Run a command in the container and exit. Non-interactive (no TTY allocated).
+.TP
+.B build
+Build the container image without starting a container. Always forces a
+rebuild, ignoring the content-hash cache.
+.TP
+.B config
+Print the resolved configuration as TOML to stdout. Useful for debugging
+config merging.
+.TP
+.B clean \fR[\fB\-\-volumes\fR]
+Remove all
+.B bubble-bot:*
+images and
+.B bubble-bot-*
+networks. With
+.BR \-\-volumes ,
+also remove named data volumes.
+.SH OPTIONS
+.SS Runtime Flags
+.TP
+.BI \-\-with\-php\  VERSION
+Include PHP runtime. Supported versions:
+.BR 8.1 ", " 8.2 ", " 8.3 .
+.TP
+.BI \-\-with\-node\  VERSION
+Include Node.js runtime. Supported versions:
+.BR 18 ", " 20 ", " 22 .
+.TP
+.B \-\-with\-rust
+Include Rust stable toolchain. No version selection.
+.TP
+.BI \-\-with\-go\  VERSION
+Include Go runtime. Supported versions:
+.BR 1.22 ", " 1.23 .
+.SS Service Flags
+.TP
+.BI \-\-with\-mysql\  \fR[\fIVERSION\fR]
+Start a MySQL service container. Default version:
+.BR 8.0 .
+.TP
+.BI \-\-with\-postgres\  \fR[\fIVERSION\fR]
+Start a PostgreSQL service container. Default version:
+.BR 16 .
+.TP
+.B \-\-with\-redis
+Start a Redis service container.
+.SS Container Flags
+.TP
+.BI \-\-name\  NAME
+Set the container name. Default:
+.BI bubble-bot- <dirname>
+where
+.I <dirname>
+is the current directory name.
+.TP
+.BI \-\-network\  NAME
+Set the Docker network name. Default:
+.BI bubble-bot- <dirname> .
+.TP
+.BI \-\-shell\  SHELL
+Shell to use inside the container. Default:
+.BR bash .
+.TP
+.B \-\-no\-cache
+Force image rebuild, ignoring the content-hash cache.
+.TP
+.B \-\-dry\-run
+Print what would be done without executing any Docker operations. Shows
+the resolved config, generated Dockerfile, and equivalent Docker CLI commands.
+.SH CONFIGURATION
+Configuration is loaded from three layers, merged in order of increasing
+precedence:
+.PP
+.RS 4
+.nf
+1. Global:  ~/.config/bubble-bot/config.toml
+2. Project: .bubble-bot.toml (in current directory)
+3. CLI flags
+.fi
+.RE
+.PP
+Absent values in higher layers do not clear values from lower layers.
+.SS Config File Format
+.PP
+.nf
+.RS 4
+[runtimes]
+php = "8.3"          # "8.1", "8.2", or "8.3"
+node = "22"          # "18", "20", or "22"
+rust = true          # bool
+go = "1.23"          # "1.22" or "1.23"
+
+[services.mysql]
+version  = "8.0"     # MySQL image version
+database = "app"     # database to create
+username = "root"    # database user
+password = "password"
+
+[services]
+redis = true
+
+[services.postgres]
+version  = "16"      # PostgreSQL image version
+database = "app"     # database to create
+username = "postgres"
+password = "password"
+
+[hooks]
+post_start = ["composer install", "npm ci"]
+pre_stop   = ["echo done"]
+
+[container]
+name    = "my-container"
+network = "my-network"
+shell   = "zsh"
+.RE
+.fi
+.SH HOOKS
+Hooks are shell commands executed inside the dev container at specific
+lifecycle points.
+.TP
+.B post_start
+Runs after the container starts and credentials are written, before the
+main command (shell, claude, chief, exec).
+.TP
+.B pre_stop
+Runs after the main command exits, before containers are cleaned up.
+.PP
+Hooks run sequentially via
+.B sh -c
+inside the container. Failures are logged as warnings but do not abort
+execution.
+.SH AUTHENTICATION
+Claude Code credentials are injected into the container automatically.
+OAuth tokens are resolved in order:
+.PP
+.RS 4
+.IP 1. 3
+.B CLAUDE_CODE_OAUTH_TOKEN
+environment variable on the host
+.IP 2. 3
+macOS Keychain
+.RB ( "Claude Code-credentials"
+service)
+.RE
+.PP
+Tokens are written into the container via stdin pipe. They are never
+exposed in CLI arguments or environment variables.
+.SH ENVIRONMENT
+.TP
+.B CLAUDE_CODE_OAUTH_TOKEN
+OAuth token for Claude Code authentication. Takes priority over Keychain.
+.TP
+.B RUST_LOG
+Log level filter for tracing output. Values:
+.BR info ", " debug ", " trace .
+.SS Environment Variables Injected into Dev Container
+When MySQL is enabled:
+.B DB_HOST=mysql\fR,
+.B DB_PORT=3306\fR,
+.B DB_DATABASE\fR,
+.B DB_USERNAME\fR,
+.BR DB_PASSWORD .
+.PP
+When PostgreSQL is enabled:
+.B DB_HOST=postgres\fR,
+.B DB_PORT=5432\fR,
+.B DB_DATABASE\fR,
+.B DB_USERNAME\fR,
+.BR DB_PASSWORD .
+.PP
+When Redis is enabled:
+.B REDIS_HOST=redis\fR,
+.BR REDIS_PORT=6379 .
+.PP
+If both MySQL and PostgreSQL are enabled, the
+.B DB_*
+variables from PostgreSQL take precedence (last write wins).
+.SH IMAGE CACHING
+Rendered Dockerfiles are SHA-256 hashed. The first 12 hex characters form
+the image tag
+.RB ( bubble-bot: <hash>).
+If a matching image exists locally, the build is skipped. Use
+.B \-\-no\-cache
+to force a rebuild. The
+.B build
+subcommand always forces a rebuild.
+.SH NAMING CONVENTIONS
+.TS
+l l l.
+Resource	Pattern	Example
+_
+Dev container	bubble-bot-<project>	bubble-bot-myapp
+Service container	bubble-bot-<project>-<service>	bubble-bot-myapp-mysql
+Network	bubble-bot-<project>	bubble-bot-myapp
+Image	bubble-bot:<hash>	bubble-bot:a1b2c3d4e5f6
+Volume	bubble-bot-<project>-<service>-data	bubble-bot-myapp-mysql-data
+.TE
+.SH LIFECYCLE
+.IP 1. 3
+Connect to Docker
+.IP 2. 3
+Clean up stale resources from prior sessions
+.IP 3. 3
+Render Dockerfile (base + runtime layers + optional chief layer)
+.IP 4. 3
+Build image or load from cache
+.IP 5. 3
+Resolve OAuth token and Claude config from host
+.IP 6. 3
+Create bridge network
+.IP 7. 3
+Start service containers and wait for readiness
+.IP 8. 3
+Start dev container (runs as your UID/GID, mounts project at /workspace)
+.IP 9. 3
+Write credentials into container
+.IP 10. 4
+Run post_start hooks
+.IP 11. 4
+Execute main command
+.IP 12. 4
+Run pre_stop hooks
+.IP 13. 4
+Clean up containers and network
+.SH SIGNALS
+.B bubble-bot
+handles
+.B SIGINT
+and
+.B SIGTERM
+by running cleanup (stopping and removing all containers and the bridge
+network) before exiting with code 130.
+.SH FILES
+.TP
+.I ~/.config/bubble-bot/config.toml
+Global configuration file.
+.TP
+.I .bubble-bot.toml
+Project-level configuration file (in current directory).
+.TP
+.I ~/.claude.json
+Read to extract the
+.B oauthAccount
+field for injection into the container.
+.SH EXAMPLES
+Start a PHP + MySQL dev container:
+.PP
+.RS 4
+.nf
+bubble-bot --with-php 8.3 --with-mysql
+.fi
+.RE
+.PP
+Run Claude Code in a Node.js container with Redis:
+.PP
+.RS 4
+.nf
+bubble-bot claude --with-node 22 --with-redis
+.fi
+.RE
+.PP
+Preview what Docker commands would run:
+.PP
+.RS 4
+.nf
+bubble-bot --dry-run --with-php 8.3 --with-mysql --with-redis
+.fi
+.RE
+.PP
+Run tests inside the container:
+.PP
+.RS 4
+.nf
+bubble-bot exec -- cargo test
+.fi
+.RE
+.PP
+Clean up everything including data volumes:
+.PP
+.RS 4
+.nf
+bubble-bot clean --volumes
+.fi
+.RE
