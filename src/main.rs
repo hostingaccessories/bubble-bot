@@ -10,10 +10,13 @@ mod services;
 mod shell;
 mod templates;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use bollard::Docker;
 use clap::Parser;
-use tracing::info;
+use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 use auth::resolve_oauth_token;
 use cli::{Cli, Command};
@@ -26,6 +29,74 @@ use hooks::HookRunner;
 use services::{Service, collect_service_env_vars, collect_services};
 use shell::{collect_dotfile_mounts, resolve_shell};
 use templates::TemplateRenderer;
+
+/// Tracks all Docker resources that need cleanup on shutdown.
+/// Shared between the main task and signal handler.
+#[derive(Default)]
+struct CleanupState {
+    docker: Option<Docker>,
+    dev_container_id: Option<String>,
+    service_container_ids: Vec<String>,
+    network_name: Option<String>,
+}
+
+impl CleanupState {
+    /// Performs cleanup of all tracked Docker resources.
+    /// Safe to call multiple times — resources are cleared after cleanup.
+    async fn cleanup(&mut self) {
+        let Some(docker) = self.docker.take() else {
+            return;
+        };
+
+        let container_mgr = ContainerManager::new(docker.clone());
+        let network_mgr = NetworkManager::new(docker);
+
+        // Stop and remove dev container
+        if let Some(id) = self.dev_container_id.take() {
+            if let Err(e) = container_mgr.stop_and_remove(&id).await {
+                warn!(error = %e, "failed to clean up dev container");
+            }
+        }
+
+        // Stop and remove service containers
+        for id in self.service_container_ids.drain(..) {
+            if let Err(e) = container_mgr.stop_and_remove(&id).await {
+                warn!(error = %e, "failed to clean up service container");
+            }
+        }
+
+        // Remove network
+        if let Some(name) = self.network_name.take() {
+            if let Err(e) = network_mgr.remove_network(&name).await {
+                warn!(error = %e, "failed to clean up network");
+            }
+        }
+    }
+}
+
+/// Spawns a background task that listens for SIGINT/SIGTERM and performs
+/// cleanup of all tracked Docker resources. Returns a `JoinHandle` that
+/// should be aborted once the normal cleanup path completes.
+fn spawn_signal_handler(state: Arc<Mutex<CleanupState>>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = ctrl_c => {
+                warn!("received SIGINT — cleaning up containers");
+            }
+            _ = sigterm.recv() => {
+                warn!("received SIGTERM — cleaning up containers");
+            }
+        }
+
+        state.lock().await.cleanup().await;
+        std::process::exit(130); // 128 + 2 (SIGINT convention)
+    })
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -216,17 +287,6 @@ async fn start_services(
     Ok(service_ids)
 }
 
-/// Stops and removes all service containers.
-async fn cleanup_services(
-    container_mgr: &ContainerManager,
-    service_ids: &[String],
-) -> Result<()> {
-    for id in service_ids {
-        container_mgr.stop_and_remove(id).await?;
-    }
-    Ok(())
-}
-
 fn run_config(config: &Config) -> Result<()> {
     let output = toml::to_string_pretty(config)?;
     print!("{output}");
@@ -288,6 +348,14 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
 
+    // Set up shared cleanup state and signal handler
+    let cleanup_state = Arc::new(Mutex::new(CleanupState {
+        docker: Some(docker.clone()),
+        network_name: Some(network_name.clone()),
+        ..Default::default()
+    }));
+    let signal_handle = spawn_signal_handler(Arc::clone(&cleanup_state));
+
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
     network_mgr.ensure_network(&network_name).await?;
@@ -297,6 +365,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Start service containers
     let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Register service containers for signal cleanup
+    cleanup_state.lock().await.service_container_ids = service_ids.clone();
 
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
@@ -320,6 +391,9 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Register dev container for signal cleanup
+    cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
     hook_runner.run_post_start();
@@ -332,13 +406,14 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Launch Chief (blocking)
     let exit_code = container_mgr.exec_interactive_command(&container_id, &cmd)?;
 
+    // Normal exit — cancel signal handler and clean up
+    signal_handle.abort();
+
     // Run pre_stop hooks
     hook_runner.run_pre_stop();
 
     // Cleanup on exit
-    container_mgr.stop_and_remove(&container_id).await?;
-    cleanup_services(&container_mgr, &service_ids).await?;
-    network_mgr.remove_network(&network_name).await?;
+    cleanup_state.lock().await.cleanup().await;
 
     if exit_code != 0 {
         std::process::exit(exit_code);
@@ -394,6 +469,14 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
 
+    // Set up shared cleanup state and signal handler
+    let cleanup_state = Arc::new(Mutex::new(CleanupState {
+        docker: Some(docker.clone()),
+        network_name: Some(network_name.clone()),
+        ..Default::default()
+    }));
+    let signal_handle = spawn_signal_handler(Arc::clone(&cleanup_state));
+
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
     network_mgr.ensure_network(&network_name).await?;
@@ -403,6 +486,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     // Start service containers
     let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Register service containers for signal cleanup
+    cleanup_state.lock().await.service_container_ids = service_ids.clone();
 
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
@@ -426,6 +512,9 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Register dev container for signal cleanup
+    cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
     hook_runner.run_post_start();
@@ -438,13 +527,14 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Launch Claude Code (blocking)
     let exit_code = container_mgr.exec_interactive_command(&container_id, &cmd)?;
 
+    // Normal exit — cancel signal handler and clean up
+    signal_handle.abort();
+
     // Run pre_stop hooks
     hook_runner.run_pre_stop();
 
     // Cleanup on exit
-    container_mgr.stop_and_remove(&container_id).await?;
-    cleanup_services(&container_mgr, &service_ids).await?;
-    network_mgr.remove_network(&network_name).await?;
+    cleanup_state.lock().await.cleanup().await;
 
     if exit_code != 0 {
         std::process::exit(exit_code);
@@ -503,6 +593,14 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
 
+    // Set up shared cleanup state and signal handler
+    let cleanup_state = Arc::new(Mutex::new(CleanupState {
+        docker: Some(docker.clone()),
+        network_name: Some(network_name.clone()),
+        ..Default::default()
+    }));
+    let signal_handle = spawn_signal_handler(Arc::clone(&cleanup_state));
+
     // Create bridge network
     let network_mgr = NetworkManager::new(docker.clone());
     network_mgr.ensure_network(&network_name).await?;
@@ -512,6 +610,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     // Start service containers
     let service_ids = start_services(&container_mgr, &services, &network_name).await?;
+
+    // Register service containers for signal cleanup
+    cleanup_state.lock().await.service_container_ids = service_ids.clone();
 
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
@@ -535,6 +636,9 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
+    // Register dev container for signal cleanup
+    cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
     hook_runner.run_post_start();
@@ -542,13 +646,14 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     // Launch interactive shell (blocking)
     let exit_code = container_mgr.exec_interactive_shell(&container_id, &shell)?;
 
+    // Normal exit — cancel signal handler and clean up
+    signal_handle.abort();
+
     // Run pre_stop hooks
     hook_runner.run_pre_stop();
 
     // Cleanup on shell exit
-    container_mgr.stop_and_remove(&container_id).await?;
-    cleanup_services(&container_mgr, &service_ids).await?;
-    network_mgr.remove_network(&network_name).await?;
+    cleanup_state.lock().await.cleanup().await;
 
     if exit_code != 0 {
         std::process::exit(exit_code);
