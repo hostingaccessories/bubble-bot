@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::cli::{Cli, ContainerFlags, RuntimeFlags, ServiceFlags};
 
 // -- Top-level config --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub runtimes: RuntimeConfig,
@@ -20,7 +20,7 @@ pub struct Config {
 
 // -- Runtimes --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
     pub php: Option<String>,
@@ -31,7 +31,7 @@ pub struct RuntimeConfig {
 
 // -- Services --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServiceConfig {
     pub mysql: Option<MysqlConfig>,
@@ -39,7 +39,7 @@ pub struct ServiceConfig {
     pub postgres: Option<PostgresConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MysqlConfig {
     pub version: String,
@@ -59,7 +59,7 @@ impl Default for MysqlConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PostgresConfig {
     pub version: String,
@@ -81,7 +81,7 @@ impl Default for PostgresConfig {
 
 // -- Hooks --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HookConfig {
     pub post_start: Vec<String>,
@@ -90,7 +90,7 @@ pub struct HookConfig {
 
 // -- Shell --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShellConfig {
     pub mount_configs: bool,
@@ -98,7 +98,7 @@ pub struct ShellConfig {
 
 // -- Container --
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ContainerConfig {
     pub network: Option<String>,
@@ -640,5 +640,49 @@ mod tests {
         let cli = Cli::parse_from(["bubble-boy"]);
         config.apply_cli(&cli);
         assert_eq!(config.container.shell.as_deref(), Some("fish"));
+    }
+
+    #[test]
+    fn config_serializes_to_toml() {
+        let config = parse_toml(
+            r#"
+            [runtimes]
+            php = "8.3"
+            node = "22"
+
+            [services.mysql]
+            version = "8.4"
+            database = "mydb"
+            username = "admin"
+            password = "secret"
+
+            [services]
+            redis = true
+
+            [hooks]
+            post_start = ["composer install"]
+
+            [shell]
+            mount_configs = true
+
+            [container]
+            shell = "bash"
+            "#,
+        );
+        let output = toml::to_string_pretty(&config).expect("serialize to TOML");
+        assert!(output.contains("php = \"8.3\""));
+        assert!(output.contains("node = \"22\""));
+        assert!(output.contains("version = \"8.4\""));
+        assert!(output.contains("redis = true"));
+        assert!(output.contains("mount_configs = true"));
+        assert!(output.contains("shell = \"bash\""));
+    }
+
+    #[test]
+    fn default_config_serializes_to_toml() {
+        let config = Config::default();
+        let output = toml::to_string_pretty(&config).expect("serialize to TOML");
+        // Default config should serialize without error
+        assert!(!output.is_empty());
     }
 }

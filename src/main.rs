@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
         Command::Shell => run_shell(&cli, &config).await,
         Command::Claude { args } => run_claude(&cli, &config, &args).await,
         Command::Chief { args } => run_chief(&cli, &config, &args).await,
+        Command::Config => run_config(&config),
         _ => {
             info!("subcommand not yet implemented");
             Ok(())
@@ -84,6 +85,12 @@ async fn cleanup_services(
     for id in service_ids {
         container_mgr.stop_and_remove(id).await?;
     }
+    Ok(())
+}
+
+fn run_config(config: &Config) -> Result<()> {
+    let output = toml::to_string_pretty(config)?;
+    print!("{output}");
     Ok(())
 }
 
