@@ -127,10 +127,7 @@ impl ImageBuilder {
                     }
                 }
                 Err(e) => {
-                    let detail = if let bollard::errors::Error::DockerStreamError {
-                        error,
-                    } = &e
-                    {
+                    let detail = if let bollard::errors::Error::DockerStreamError { error } = &e {
                         error.clone()
                     } else {
                         format!("{e}")
