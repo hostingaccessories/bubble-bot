@@ -11,8 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /home/dev && chmod 777 /home/dev
-
 ENV HOME=/home/dev
+
+# Install Claude Code
+# Ensure Claude Code is on PATH for all shells
+ENV PATH="/home/dev/.local/bin:${PATH}"
+RUN echo 'export PATH="$HOME/.local/bin:$PATH"' > /etc/profile.d/claude.sh
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN mkdir -p /home/dev/.claude && chmod -R 777 /home/dev
+RUN echo '{"hasCompletedOnboarding":true}' > /home/dev/.claude.json
 
 WORKDIR /workspace

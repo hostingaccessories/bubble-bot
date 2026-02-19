@@ -108,7 +108,7 @@ pub struct ContainerFlags {
     pub name: Option<String>,
 
     /// Shell to use inside the container
-    #[arg(long, default_value = "zsh")]
+    #[arg(long, default_value = "bash")]
     pub shell: String,
 
     /// Force rebuild ignoring cache
@@ -259,9 +259,9 @@ mod tests {
     }
 
     #[test]
-    fn shell_defaults_to_zsh() {
+    fn shell_defaults_to_bash() {
         let cli = Cli::parse_from(["bubble-boy"]);
-        assert_eq!(cli.container.shell, "zsh");
+        assert_eq!(cli.container.shell, "bash");
     }
 
     #[test]

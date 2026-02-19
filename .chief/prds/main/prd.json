@@ -319,7 +319,7 @@
         "Container cleanup happens after Chief exits"
       ],
       "priority": 20,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-021",
@@ -334,7 +334,8 @@
         "Hook output is streamed to the user's terminal"
       ],
       "priority": 21,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-022",
@@ -347,7 +348,8 @@
         "Default shell selection: use detected shell, fallback to bash"
       ],
       "priority": 22,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-023",
@@ -359,7 +361,8 @@
         "No container is started for this subcommand"
       ],
       "priority": 23,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-024",
@@ -373,7 +376,8 @@
         "Lists what was removed"
       ],
       "priority": 24,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-025",
@@ -385,7 +389,8 @@
         "Works with all subcommands"
       ],
       "priority": 25,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-026",
@@ -399,7 +404,8 @@
         "No orphaned containers left after any exit path (normal exit, Ctrl+C, crash recovery on next run)"
       ],
       "priority": 26,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-027",
@@ -411,7 +417,8 @@
         "Check for stale `bubble-boy-\u003cproject\u003e` networks and clean up"
       ],
       "priority": 27,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-028",
@@ -423,7 +430,7 @@
         "Clear indication when build completes or image is loaded from cache"
       ],
       "priority": 28,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-029",
@@ -436,7 +443,8 @@
         "Non-interactive (no TTY allocation unless the command needs it)"
       ],
       "priority": 29,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     },
     {
       "id": "US-030",
@@ -448,7 +456,8 @@
         "Reports the resulting image tag"
       ],
       "priority": 30,
-      "passes": false
+      "passes": true,
+      "inProgress": false
     }
   ]
 }

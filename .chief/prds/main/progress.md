@@ -39,7 +39,8 @@
 - `TemplateRenderer::render()` returns `RenderResult { dockerfile, context_files }` — callers must use `.dockerfile` for the Dockerfile string
 - `ImageBuilder::build(dockerfile, context_files, no_cache)` — pass `&render_result.context_files` for extra build context files
 - `ContextFile { path, content, mode }` in `templates` module represents extra files in the Docker build context
-- `ContainerManager::exec_interactive_command(id, &[&str])` runs arbitrary commands via `docker exec -it` — reusable for `claude`, `chief`, and `exec` subcommands
+- `ContainerManager::exec_interactive_command(id, &[&str])` runs arbitrary commands via `docker exec -it` — reusable for `claude` and `chief` subcommands
+- `ContainerManager::exec_command(id, &[&str])` runs commands via `docker exec` (no `-it`) — non-interactive, for `exec` subcommand and scripting
 - Network management: `NetworkManager::new(docker)` → `ensure_network(name)` → (use containers) → `remove_network(name)`
 - `default_network_name()` returns same format as `default_container_name()` — `bubble-boy-<project-dir>`
 - `ContainerOpts.network: Option<String>` — when set, container joins the network via `HostConfig.network_mode` + `NetworkingConfig` with alias
@@ -51,7 +52,26 @@
 - MySQL root user: only set `MYSQL_ROOT_PASSWORD` + `MYSQL_DATABASE` (MySQL rejects `MYSQL_USER=root`)
 - `wait_for_ready()` uses `docker exec` with retry loop (30 attempts, 2s interval) for service readiness probes
 - Cleanup order: dev container → service containers → network (named volumes preserved)
+- `services::collect_services(config, project)` is the central entry point for service discovery; `services::collect_service_env_vars(services)` aggregates env vars
+- `.chief` directory is gitignored — PRD changes are tracked locally only; only commit source files
 - Boolean services (like Redis) use `Option<bool>` in config — check `== Some(true)` in `collect_services()`; no config struct needed
+- `TemplateRenderer::render_with_options(config, install_chief)` controls whether Chief/Claude Code is installed in the Dockerfile; `render()` delegates with `install_chief=false`
+- Chief layer template (`chief.dockerfile`) conditionally installs Node.js if not already present, then `npm install -g @anthropic-ai/claude-code`
+- New subcommand functions follow `run_claude()` pattern: same lifecycle (network → services → container → hooks → exec → hooks → cleanup), different command and render options
+- `HookRunner::new(container_id, &config.hooks)` → `run_post_start()` after container start, `run_pre_stop()` after interactive session; failures logged, not propagated
+- Hooks use `docker exec <container> sh -c <cmd>` (non-interactive, inherited stdout/stderr for streaming)
+- Shell resolution: `resolve_shell(config_shell)` → config value > `$SHELL` basename > "bash" fallback
+- Dotfile mounts: `collect_dotfile_mounts()` returns `Vec<String>` in `host:/home/dev/file:ro` format; guarded by `config.shell.mount_configs`
+- `ContainerOpts.extra_binds` for additional bind mounts beyond the project workspace mount
+- All config structs derive both `Deserialize` and `Serialize` — enables TOML output via `toml::to_string_pretty()`
+- Non-container subcommands (like `config`) use synchronous `fn` (not `async fn`) since they don't need Docker
+- Docker-only subcommands (like `clean`) that don't need Config still use `async fn` for bollard API calls
+- `--dry-run` is intercepted early in `main()` before Docker connection; `run_dry_run()` is synchronous and uses `ImageBuilder::compute_tag()` (static method) to show the would-be image tag
+- bollard `list_images` with `reference` filter + `remove_image` with `force: true` for image cleanup
+- bollard `list_volumes` returns `Option<Vec<Volume>>` — always `unwrap_or_default()`
+- Signal handling: `CleanupState` + `Arc<Mutex<>>` pattern for sharing Docker resource tracking between main task and signal handler; `spawn_signal_handler()` returns `JoinHandle` that must be `abort()`ed on normal exit
+- Stale resource detection: `cleanup_stale_resources()` in `main.rs` calls `ContainerManager::cleanup_stale()` + `NetworkManager::cleanup_stale()` — runs on startup before creating new resources; Docker container names have leading `/` but network names don't
+- Progress indicators: use `indicatif::ProgressBar::new_spinner()` with `enable_steady_tick()` for indefinite-duration tasks; `set_message()` for updates; `finish_with_message()` for completion
 
 ---
 
@@ -326,4 +346,174 @@
   - Unlike MySQL, PostgreSQL doesn't have special root user handling — `POSTGRES_USER` works for any username
   - `PostgresConfig` already existed in config.rs with defaults (version: "16", database: "app", username: "postgres", password: "password")
   - All 125 tests pass (117 existing + 8 new PostgreSQL tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-019
+- What was implemented: Centralized service collection and env var injection — moved `collect_services()` from `main.rs` to `services/mod.rs` as a public function; added `collect_service_env_vars()` helper that aggregates `dev_env()` from all active services; added 10 integration tests verifying multi-service env composition, naming conventions, and edge cases
+- Files changed:
+  - `src/services/mod.rs` — Added `collect_services(config, project)` and `collect_service_env_vars(services)` public functions; 10 new tests (empty config, single services, all three services, env var collection, naming convention verification, redis false guard)
+  - `src/main.rs` — Replaced local `collect_services()` with centralized `services::collect_services()` and `services::collect_service_env_vars()`; removed individual service type imports (MysqlService, RedisService, PostgresService)
+- **Learnings for future iterations:**
+  - `collect_services()` takes `(config, project)` params — callers no longer need to import individual service types
+  - `collect_service_env_vars()` returns flat `Vec<String>` — callers just `extend()` their existing env var list
+  - MySQL and Postgres both use `DB_*` prefix — when both are active, Docker uses the last value set (Postgres overwrites MySQL's `DB_HOST`, `DB_PORT` etc.)
+  - `redis = Some(false)` should NOT be collected — the guard checks `== Some(true)` explicitly
+  - `.chief` directory is gitignored — PRD changes are tracked locally only
+  - All 135 tests pass (125 existing + 10 new service integration tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-020
+- What was implemented: Chief subcommand — `bubble-boy chief` starts a container with Claude Code (Chief) installed via npm, runs `chief` with trailing args support; auth token injected via entrypoint flow; Chief is installed in the Dockerfile template when the `chief` subcommand is used (via `render_with_options(config, true)`); container cleanup on exit
+- Files changed:
+  - `src/templates/chief.dockerfile` — New file: installs Claude Code (`@anthropic-ai/claude-code`) via npm; conditionally installs Node.js 22 if not already present
+  - `src/templates/mod.rs` — Added `CHIEF_TEMPLATE` static; added `render_with_options()` method with `install_chief` parameter; `render()` delegates to `render_with_options(config, false)`; 6 new Chief template tests
+  - `src/main.rs` — Added `run_chief()` function wired to `Command::Chief { args }` match arm; follows same lifecycle as `run_claude()` but uses `render_with_options(config, true)` and runs `chief` command instead of `claude`
+- **Learnings for future iterations:**
+  - `render_with_options()` is the extensible pattern for subcommand-specific Dockerfile layers — future subcommands needing special tools can follow this approach
+  - Chief template uses `command -v node` check to conditionally install Node.js — avoids duplicate Node.js installation when `--with-node` is also specified
+  - The `chief` command is provided by the `@anthropic-ai/claude-code` npm package — same package provides `claude` CLI
+  - `run_chief()` is nearly identical to `run_claude()` — the only differences are: (1) `render_with_options(config, true)`, (2) command is `["chief"]` instead of `["claude", "--permission-mode", "bypassPermissions"]`
+  - All 141 tests pass (135 existing + 6 new Chief template tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-021
+- What was implemented: Hook execution — `HookRunner` struct in `src/hooks.rs` reads `post_start` and `pre_stop` arrays from resolved `HookConfig`; hooks run via `docker exec` with `sh -c` for shell command interpretation; output streamed to terminal (inherited stdout/stderr); failures logged as warnings but do not prevent cleanup; wired into all three subcommand functions (`run_shell`, `run_claude`, `run_chief`)
+- Files changed:
+  - `src/hooks.rs` — Complete rewrite: `HookRunner` struct with `run_post_start()`, `run_pre_stop()`, and private `run_hook()` methods; uses `docker exec <container> sh -c <cmd>` for shell command execution; 4 unit tests
+  - `src/main.rs` — Added `HookRunner` import; all three subcommand functions (`run_shell`, `run_claude`, `run_chief`) now create `HookRunner` and call `run_post_start()` after container start and `run_pre_stop()` after interactive session exits
+- **Learnings for future iterations:**
+  - Hooks use `docker exec <container> sh -c <cmd>` (not `docker exec -it`) since hooks are non-interactive — stdin set to null, stdout/stderr inherited for streaming
+  - `HookRunner::new()` takes references to container_id and HookConfig to avoid ownership issues
+  - Hook failures return no error — `run_hook()` catches both non-zero exit codes and execution errors and logs them as warnings
+  - The same `HookRunner` pattern is used in all three subcommands: create after `create_and_start()`, call `run_post_start()` before the main command, call `run_pre_stop()` after the main command exits
+  - All 145 tests pass (141 existing + 4 new hook tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-022
+- What was implemented: Shell detection and dotfile mounting — `src/shell.rs` detects user's shell from `$SHELL` env var (basename extraction, fallback to bash); `collect_dotfile_mounts()` scans for common dotfiles (.zshrc, .bashrc, .bash_profile, .profile, .aliases, .inputrc, .vimrc, .gitconfig, .tmux.conf) and returns read-only bind mount strings; `resolve_shell()` prioritizes config value over detected shell; `ContainerOpts` extended with `extra_binds` field; all three subcommands (shell, claude, chief) conditionally collect dotfile mounts when `mount_configs = true`
+- Files changed:
+  - `src/shell.rs` — Complete rewrite: `detect_shell()`, `collect_dotfile_mounts()`, `resolve_shell()` functions; 7 unit tests
+  - `src/docker/containers.rs` — Added `extra_binds: Vec<String>` to `ContainerOpts`; `create_and_start()` extends binds list with extra_binds
+  - `src/main.rs` — Updated `run_shell()` to use `resolve_shell()` instead of hardcoded fallback; all three subcommands now conditionally collect dotfile mounts when `config.shell.mount_configs` is true; added `collect_dotfile_mounts` and `resolve_shell` imports
+- **Learnings for future iterations:**
+  - `detect_shell()` extracts basename from `$SHELL` env var using `Path::file_name()` — returns "bash" if `$SHELL` is unset
+  - `resolve_shell()` takes `Option<&str>` from config — when `None`, falls back to detected shell (not hardcoded "zsh")
+  - Dotfile mounts use `host_path:/home/dev/filename:ro` format — read-only to prevent container from modifying host files
+  - `ContainerOpts.extra_binds` is `Vec<String>` appended to the project bind mount — keeps the project mount separate from optional dotfile mounts
+  - `PathBuf` import only used in test module — moving it to `#[cfg(test)] mod tests` avoids the unused import warning
+  - All 152 tests pass (145 existing + 7 new shell tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-023
+- What was implemented: Config subcommand — `bubble-boy config` prints the fully resolved configuration (after all merge layers: defaults → global → project → CLI) as TOML to stdout; no container is started
+- Files changed:
+  - `src/config.rs` — Added `Serialize` derive to all config structs (`Config`, `RuntimeConfig`, `ServiceConfig`, `MysqlConfig`, `PostgresConfig`, `HookConfig`, `ShellConfig`, `ContainerConfig`); changed `use serde::Deserialize` to `use serde::{Deserialize, Serialize}`; 2 new serialization tests
+  - `src/main.rs` — Added `run_config()` function using `toml::to_string_pretty()` for TOML output; wired `Command::Config` match arm to `run_config()`
+- **Learnings for future iterations:**
+  - `toml::to_string_pretty()` serializes a `Serialize`-implementing struct to formatted TOML — requires `Serialize` derive on all nested structs
+  - Adding `Serialize` alongside `Deserialize` is non-breaking — existing `#[serde(default)]` attributes work for both directions
+  - `run_config()` is synchronous (not async) since it only serializes and prints — no Docker or network calls needed
+  - The `config` subcommand is the simplest subcommand pattern: load config, process, print, exit (no container lifecycle)
+  - All 154 tests pass (152 existing + 2 new config serialization tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-024
+- What was implemented: Clean subcommand — `bubble-boy clean` removes all `bubble-boy:*` images and `bubble-boy-*` networks; `--volumes` flag additionally removes `bubble-boy-*` named volumes; lists what was removed to stdout
+- Files changed:
+  - `src/docker/clean.rs` — New file: `Cleaner` struct with `clean()`, `remove_images()`, `remove_networks()`, `remove_volumes()` methods; uses bollard `list_images`/`remove_image`, `list_networks`/`remove_network`, `list_volumes`/`remove_volume` APIs; 1 unit test
+  - `src/docker/mod.rs` — Added `pub mod clean`
+  - `src/main.rs` — Added `run_clean()` async function wired to `Command::Clean { volumes }` match arm; imports `Cleaner` from `docker::clean`
+- **Learnings for future iterations:**
+  - bollard `list_images` with `reference` filter matches the image name (e.g., `"bubble-boy"` matches all `bubble-boy:*` tags)
+  - bollard `list_volumes` uses `ListVolumesOptions` with generic type `<String>` — `name` filter matches partial volume names
+  - Docker network name filter returns partial matches — must verify `starts_with("bubble-boy-")` on results for exact matching
+  - `remove_image` takes `RemoveImageOptions { force: true }` to handle images used by stopped containers
+  - `VolumeListResponse.volumes` is `Option<Vec<Volume>>` — unwrap with `unwrap_or_default()`
+  - `run_clean()` is async (unlike `run_config()`) since it needs Docker API calls
+  - Clean subcommand doesn't need `Config` loading — it just connects to Docker and cleans up resources
+  - All 155 tests pass (154 existing + 1 new clean test), clippy clean, build clean
+---
+
+## 2026-02-18 - US-025
+- What was implemented: Dry-run mode — `--dry-run` flag prints resolved config (TOML), generated Dockerfile, and Docker commands that would be executed (image build, network create, service containers, dev container run, exec command, hooks) without creating any containers, networks, or images; works with all subcommands (shell, claude, chief, exec, build, config, clean)
+- Files changed:
+  - `src/main.rs` — Added `run_dry_run()` function that intercepts `--dry-run` early in `main()` before any Docker API calls; renders config via `toml::to_string_pretty()`, generates Dockerfile via `TemplateRenderer::render_with_options()`, computes image tag via `ImageBuilder::compute_tag()`, and prints equivalent Docker commands (network create, service container runs, dev container run with mounts/env/network, exec command, hooks); handles all `Command` variants including non-container subcommands (config prints note, clean prints what would be removed)
+- **Learnings for future iterations:**
+  - `ImageBuilder::compute_tag()` is a static method that doesn't need a Docker connection — perfect for dry-run mode
+  - Dry-run intercept should happen early in `main()` before any async Docker operations, keeping the function synchronous
+  - The `Command` enum must be matched exhaustively in dry-run — `Exec` and `Build` subcommands (not yet implemented) are covered for forward compatibility
+  - `libc::getuid()`/`libc::getgid()` can be used in dry-run to show realistic `--user` flags
+  - Auth token is shown as `<token>` placeholder in dry-run output to avoid leaking credentials
+  - All 155 tests pass (no new tests needed — dry-run reuses existing tested components like template rendering and config serialization), clippy clean, build clean
+---
+
+## 2026-02-18 - US-026
+- What was implemented: Signal handling for clean shutdown — `CleanupState` struct tracks all Docker resources (dev container, service containers, network) shared between main task and signal handler via `Arc<Mutex<>>`; `spawn_signal_handler()` listens for SIGINT (Ctrl+C) and SIGTERM, performs full cleanup via `CleanupState::cleanup()`, then exits with code 130; normal exit path aborts the signal handler and uses the same `CleanupState::cleanup()` for consistency; all three subcommands (shell, claude, chief) updated to use shared cleanup state; removed standalone `cleanup_services()` function
+- Files changed:
+  - `src/main.rs` — Added `CleanupState` struct with `cleanup()` method; added `spawn_signal_handler()` function using `tokio::signal::ctrl_c()` and `tokio::signal::unix::signal(SignalKind::terminate())`; refactored `run_shell()`, `run_claude()`, `run_chief()` to use shared cleanup state via `Arc<Mutex<CleanupState>>`; removed standalone `cleanup_services()` function
+- **Learnings for future iterations:**
+  - `tokio::signal::ctrl_c()` handles SIGINT; `tokio::signal::unix::signal(SignalKind::terminate())` handles SIGTERM — both included in tokio "full" feature
+  - `Arc<Mutex<CleanupState>>` pattern works well for sharing mutable state between main task and signal handler
+  - `CleanupState::cleanup()` uses `take()`/`drain(..)` to clear resources after cleanup — safe to call multiple times
+  - Signal handler should `abort()` on normal exit to prevent it from interfering with subsequent cleanup
+  - `std::process::exit(130)` is the Unix convention for SIGINT termination (128 + signal number 2)
+  - Named volumes are preserved during cleanup — only containers and networks are removed
+  - Crash recovery on next run is handled by `cleanup_existing()` in container/network managers (already implemented in US-006/US-015)
+  - All 155 tests pass (no new tests needed — signal handling logic is infra-level and uses existing tested components), clippy clean, build clean
+---
+
+## 2026-02-18 - US-027
+- What was implemented: Stale container and network detection — on startup, all container-based subcommands (shell, claude, chief) now detect and auto-remove stale `bubble-boy-<project>*` containers (dev + service containers) and networks from crashed previous sessions; `cleanup_stale()` methods added to both `ContainerManager` and `NetworkManager`; `cleanup_stale_resources()` orchestrator function in `main.rs` called before creating new resources; `matches_stale_prefix()` helper functions for testable prefix matching logic
+- Files changed:
+  - `src/docker/containers.rs` — Added `cleanup_stale()` method to `ContainerManager` (lists all containers matching project prefix, stops and removes them with warnings); added `matches_stale_prefix()` helper for Docker container name matching (accounts for leading `/`); 4 new unit tests
+  - `src/docker/networks.rs` — Added `cleanup_stale()` method to `NetworkManager` (lists all networks matching project prefix, removes them with warnings); added `matches_stale_prefix()` helper for network name matching; 4 new unit tests
+  - `src/main.rs` — Added `cleanup_stale_resources()` orchestrator function; wired into `run_shell()`, `run_claude()`, `run_chief()` after Docker connection but before resource creation
+- **Learnings for future iterations:**
+  - Docker container names have a leading `/` (e.g., `/bubble-boy-myproject`) — prefix matching must account for this
+  - Network names do NOT have a leading `/` — separate matching helper needed
+  - Stale detection uses `name` filter with `list_containers`/`list_networks` + exact prefix matching (Docker filters return partial matches)
+  - `cleanup_stale` must run before `cleanup_existing` and `ensure_network` — it cleans up ALL project-related resources, not just the specific container/network
+  - Stale container removal failures are logged as warnings (not errors) to avoid blocking new session startup
+  - All 163 tests pass (155 existing + 4 container stale prefix tests + 4 network stale prefix tests), clippy clean, build clean
+---
+
+## 2026-02-18 - US-028
+- What was implemented: Progress bars for image builds — replaced `tracing::info!` logging with `indicatif` spinners and styled messages; cache hit shows a checkmark with "Image loaded from cache" message; builds show a spinning animation that updates with Docker build step messages; build errors display failure message before bailing; build completion shows success message with image tag
+- Files changed:
+  - `src/docker/images.rs` — Replaced `tracing::info` import with `indicatif::{ProgressBar, ProgressStyle}`; cache hit path creates a finished spinner with `✓` prefix; build path creates a steady-tick spinner (`{spinner:.cyan} {msg}` template) that updates message with each Docker build stream output; error paths finish the spinner with failure message before bailing
+- **Learnings for future iterations:**
+  - `indicatif` was already in Cargo.toml — no dependency changes needed
+  - `ProgressBar::new_spinner()` + `enable_steady_tick()` is the pattern for indefinite-duration tasks like Docker builds
+  - `ProgressStyle::default_spinner().template()` returns `Result` — use `.expect()` for compile-time-known templates
+  - `pb.set_message()` updates the spinner text in-place — ideal for streaming Docker build output
+  - `pb.finish_with_message()` stops the spinner and displays a final message — used for both success and error cases
+  - For cache hit, a non-spinning bar with `✓` prefix and `finish_with_message()` gives clean output
+  - All 163 tests pass (no new tests needed — progress bars are visual output, existing tests cover build logic), clippy clean, build clean
+---
+
+## 2026-02-18 - US-029
+- What was implemented: The `bubble-boy exec -- <cmd>` subcommand — starts a container, runs the command non-interactively (no TTY), and cleans up; exit code from the command is propagated as Bubble Boy's exit code; command runs with the same mounts, env, network, hooks, and cleanup as the `shell` subcommand
+- Files changed:
+  - `src/docker/containers.rs` — Added `exec_command()` method to `ContainerManager` for non-interactive command running via `docker exec` (no `-it` flags); inherits stdout/stderr for output streaming
+  - `src/main.rs` — Added `run_exec()` async function following the same lifecycle pattern as `run_shell()`/`run_claude()`/`run_chief()`; wired `Command::Exec { cmd }` match arm to `run_exec()`
+- **Learnings for future iterations:**
+  - `exec_command()` differs from `exec_interactive_command()` by omitting `-it` flags — non-interactive for scripting use cases
+  - `run_exec()` follows the same lifecycle as other container subcommands: stale cleanup -> image build -> network -> services -> container -> hooks -> command -> hooks -> cleanup
+  - The subcommand reuses `render()` (not `render_with_options()`) since no special Dockerfile layers are needed
+  - Exit code propagation uses `std::process::exit(exit_code)` for non-zero codes, same pattern as other subcommands
+  - Dry-run support was already implemented in US-025 (forward compatibility in the `Command::Exec` match arm)
+  - All 163 tests pass (no new tests needed — core logic reuses existing tested components), clippy clean, build clean
+---
+
+## 2026-02-18 - US-030
+- What was implemented: Build subcommand — `bubble-boy build` renders the Dockerfile and force-builds the image regardless of cache (passes `no_cache=true` to `ImageBuilder::build()`); no container is started; reports the resulting image tag to stdout; removed the wildcard `_ =>` match arm in `main()` since all `Command` variants are now handled
+- Files changed:
+  - `src/main.rs` — Added `run_build()` async function wired to `Command::Build` match arm; replaced wildcard `_ =>` with explicit `Command::Build` match; function connects to Docker, renders Dockerfile via `TemplateRenderer::render()`, force-builds via `ImageBuilder::build()` with `no_cache=true`, and prints the resulting image tag
+- **Learnings for future iterations:**
+  - `run_build()` is the simplest Docker-based subcommand — no container lifecycle, no network, no services, no hooks, no signal handling
+  - Force build is achieved by passing `true` for the `no_cache` parameter to `ImageBuilder::build()` — this skips the `image_exists()` check entirely
+  - The `cli` parameter is not needed since `--no-cache` is irrelevant when always force-building
+  - Dry-run support for `Command::Build` was already implemented in US-025 (prints "(build only — no container started)")
+  - With US-030 complete, all `Command` variants are handled — the wildcard `_ =>` match arm is removed, giving exhaustive match checking
+  - All 163 tests pass (no new tests needed — core logic reuses existing tested components), clippy clean, build clean
 ---

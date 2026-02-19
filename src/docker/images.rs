@@ -110,7 +110,7 @@ impl ImageBuilder {
 
         let mut stream = self.docker.build_image(
             options,
-            None,
+            Some(std::collections::HashMap::new()),
             Some(tar_bytes.into()),
         );
 

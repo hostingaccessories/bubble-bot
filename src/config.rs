@@ -14,7 +14,6 @@ pub struct Config {
     pub runtimes: RuntimeConfig,
     pub services: ServiceConfig,
     pub hooks: HookConfig,
-    pub shell: ShellConfig,
     pub container: ContainerConfig,
 }
 
@@ -86,14 +85,6 @@ impl Default for PostgresConfig {
 pub struct HookConfig {
     pub post_start: Vec<String>,
     pub pre_stop: Vec<String>,
-}
-
-// -- Shell --
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct ShellConfig {
-    pub mount_configs: bool,
 }
 
 // -- Container --
@@ -171,9 +162,6 @@ impl Config {
             self.hooks.pre_stop = other.hooks.pre_stop;
         }
 
-        // Shell
-        self.shell.mount_configs = other.shell.mount_configs;
-
         // Container
         if other.container.network.is_some() {
             self.container.network = other.container.network;
@@ -235,7 +223,7 @@ impl Config {
         // shell always has a value from clap default, but we only override
         // if it differs from the default "zsh" (meaning user explicitly set it)
         // or if no config file set a shell.
-        if flags.shell != "zsh" || self.container.shell.is_none() {
+        if flags.shell != "bash" || self.container.shell.is_none() {
             self.container.shell = Some(flags.shell.clone());
         }
     }
@@ -281,7 +269,6 @@ mod tests {
         assert!(config.services.postgres.is_none());
         assert!(config.hooks.post_start.is_empty());
         assert!(config.hooks.pre_stop.is_empty());
-        assert!(!config.shell.mount_configs);
     }
 
     #[test]
@@ -313,9 +300,6 @@ mod tests {
             post_start = ["composer install", "npm ci"]
             pre_stop = ["echo bye"]
 
-            [shell]
-            mount_configs = true
-
             [container]
             network = "custom-net"
             name = "my-container"
@@ -345,8 +329,6 @@ mod tests {
         assert_eq!(config.hooks.post_start, vec!["composer install", "npm ci"]);
         assert_eq!(config.hooks.pre_stop, vec!["echo bye"]);
 
-        assert!(config.shell.mount_configs);
-
         assert_eq!(config.container.network.as_deref(), Some("custom-net"));
         assert_eq!(config.container.name.as_deref(), Some("my-container"));
         assert_eq!(config.container.shell.as_deref(), Some("bash"));
@@ -364,7 +346,6 @@ mod tests {
         assert!(config.runtimes.node.is_none());
         assert!(config.services.mysql.is_none());
         assert!(config.hooks.post_start.is_empty());
-        assert!(!config.shell.mount_configs);
     }
 
     #[test]
@@ -372,7 +353,6 @@ mod tests {
         let config = parse_toml("");
         assert!(config.runtimes.php.is_none());
         assert!(config.services.mysql.is_none());
-        assert!(!config.shell.mount_configs);
     }
 
     #[test]
@@ -414,9 +394,6 @@ mod tests {
 
             [hooks]
             post_start = ["npm ci"]
-
-            [shell]
-            mount_configs = true
             "#,
         );
         // Overlay has no runtimes, no mysql, no hooks
@@ -427,8 +404,6 @@ mod tests {
         assert_eq!(base.runtimes.php.as_deref(), Some("8.2"));
         assert!(base.services.mysql.is_some());
         assert_eq!(base.hooks.post_start, vec!["npm ci"]);
-        // mount_configs uses overlay default (false) since it's a bool merge
-        // This is correct: overlay explicitly says mount_configs = false (default)
     }
 
     #[test]
@@ -440,9 +415,6 @@ mod tests {
             r#"
             [runtimes]
             php = "8.2"
-
-            [shell]
-            mount_configs = true
             "#,
         );
         config.merge(global);
@@ -520,14 +492,11 @@ mod tests {
         // defaults -> global -> project -> CLI
         let mut config = Config::default();
 
-        // Global sets php 8.1 and mount_configs
+        // Global sets php 8.1
         let global = parse_toml(
             r#"
             [runtimes]
             php = "8.1"
-
-            [shell]
-            mount_configs = true
 
             [hooks]
             post_start = ["global-hook"]
@@ -622,10 +591,10 @@ mod tests {
             shell = "fish"
             "#,
         );
-        // CLI with explicit --shell bash overrides config
-        let cli = Cli::parse_from(["bubble-boy", "--shell", "bash"]);
+        // CLI with explicit --shell zsh overrides config
+        let cli = Cli::parse_from(["bubble-boy", "--shell", "zsh"]);
         config.apply_cli(&cli);
-        assert_eq!(config.container.shell.as_deref(), Some("bash"));
+        assert_eq!(config.container.shell.as_deref(), Some("zsh"));
     }
 
     #[test]
@@ -636,7 +605,7 @@ mod tests {
             shell = "fish"
             "#,
         );
-        // CLI with default --shell zsh does not override config "fish"
+        // CLI with default --shell bash does not override config "fish"
         let cli = Cli::parse_from(["bubble-boy"]);
         config.apply_cli(&cli);
         assert_eq!(config.container.shell.as_deref(), Some("fish"));
@@ -662,9 +631,6 @@ mod tests {
             [hooks]
             post_start = ["composer install"]
 
-            [shell]
-            mount_configs = true
-
             [container]
             shell = "bash"
             "#,
@@ -674,7 +640,6 @@ mod tests {
         assert!(output.contains("node = \"22\""));
         assert!(output.contains("version = \"8.4\""));
         assert!(output.contains("redis = true"));
-        assert!(output.contains("mount_configs = true"));
         assert!(output.contains("shell = \"bash\""));
     }
 

@@ -246,6 +246,35 @@ impl ContainerManager {
         Ok(status.code().unwrap_or(1))
     }
 
+    /// Writes the OAuth credentials file inside the container.
+    /// Pipes the content via stdin to avoid exposing the token in process arguments.
+    pub fn write_credentials(&self, container_id: &str, credentials: &str) -> Result<()> {
+        use std::io::Write;
+
+        let mut child = Command::new("docker")
+            .args([
+                "exec", "-i", container_id, "sh", "-c",
+                "mkdir -p \"${HOME}/.claude\" && cat > \"${HOME}/.claude/.credentials.json\" && chmod 600 \"${HOME}/.claude/.credentials.json\"",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("failed to spawn docker exec for credentials")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(credentials.as_bytes())?;
+        }
+
+        let status = child.wait().context("failed to wait for credentials write")?;
+        if !status.success() {
+            anyhow::bail!("failed to write credentials to container");
+        }
+
+        info!(container = %container_id, "OAuth credentials written");
+        Ok(())
+    }
+
     /// Runs a command inside the container via `docker exec` (non-interactive).
     /// Inherits stdout and stderr but does not allocate a TTY.
     pub fn exec_command(&self, container_id: &str, cmd: &[&str]) -> Result<i32> {

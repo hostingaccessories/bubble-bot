@@ -57,8 +57,6 @@ impl<'a> TemplateRenderer<'a> {
 
     /// Renders the full Dockerfile by composing the base template with runtime
     /// layers discovered from the runtime registry, plus the entrypoint script.
-    /// If `install_chief` is true, includes a layer to install Claude Code (which
-    /// provides the `chief` command) via npm.
     pub fn render(&self, config: &Config) -> Result<RenderResult> {
         self.render_with_options(config, false)
     }
@@ -80,7 +78,7 @@ impl<'a> TemplateRenderer<'a> {
             rendered.push_str(&layer);
         }
 
-        // Install Chief (Claude Code npm package) when requested
+        // Install Chief binary from GitHub releases when requested
         if install_chief {
             rendered.push('\n');
             rendered.push_str(CHIEF_TEMPLATE);
@@ -139,8 +137,12 @@ mod tests {
         assert!(output.contains("unzip"));
         assert!(output.contains("build-essential"));
         assert!(output.contains("ca-certificates"));
-        assert!(output.contains("mkdir -p /home/dev"));
-        assert!(output.contains("chmod 777 /home/dev"));
+        assert!(output.contains("mkdir -p /home/dev/.claude"));
+        assert!(output.contains("chmod -R 777 /home/dev"));
+        assert!(output.contains("hasCompletedOnboarding"));
+        assert!(output.contains("claude.ai/install.sh"));
+        assert!(output.contains("/home/dev/.local/bin"));
+        assert!(output.contains("/etc/profile.d/claude.sh"));
         assert!(output.contains("WORKDIR /workspace"));
     }
 
@@ -526,43 +528,20 @@ mod tests {
 
         assert_eq!(result.context_files.len(), 1);
         assert_eq!(result.context_files[0].path, "entrypoint.sh");
-        assert!(result.context_files[0].content.contains("CLAUDE_CODE_OAUTH_TOKEN"));
-        assert!(result.context_files[0].content.contains(".credentials.json"));
+        assert!(result.context_files[0].content.contains("exec"));
         assert_eq!(result.context_files[0].mode, 0o755);
     }
 
     #[test]
-    fn entrypoint_script_unsets_env_var() {
+    fn entrypoint_script_does_not_contain_secrets() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
         let result = renderer.render(&config).unwrap();
 
         let entrypoint = &result.context_files[0].content;
-        assert!(entrypoint.contains("unset CLAUDE_CODE_OAUTH_TOKEN"));
-    }
-
-    #[test]
-    fn entrypoint_script_writes_credentials_json() {
-        let renderer = TemplateRenderer::new().unwrap();
-        let config = Config::default();
-        let result = renderer.render(&config).unwrap();
-
-        let entrypoint = &result.context_files[0].content;
-        assert!(entrypoint.contains("/.claude/.credentials.json"));
-        assert!(entrypoint.contains("claudeAiOauth"));
-    }
-
-    #[test]
-    fn entrypoint_script_works_with_uid_mapping() {
-        let renderer = TemplateRenderer::new().unwrap();
-        let config = Config::default();
-        let result = renderer.render(&config).unwrap();
-
-        let entrypoint = &result.context_files[0].content;
-        // Uses $HOME which respects the user mapping
-        assert!(entrypoint.contains("${HOME}/.claude"));
-        // Sets secure permissions
-        assert!(entrypoint.contains("chmod 600"));
+        // Credentials are written via docker exec after start, not in the entrypoint
+        assert!(!entrypoint.contains("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(!entrypoint.contains("credentials"));
     }
 
     #[test]
@@ -572,19 +551,19 @@ mod tests {
         let result = renderer.render(&config).unwrap();
         let output = &result.dockerfile;
 
-        assert!(!output.contains("@anthropic-ai/claude-code"));
         assert!(!output.contains("chief"));
     }
 
     #[test]
-    fn render_with_chief_installs_claude_code() {
+    fn render_with_chief_downloads_binary() {
         let renderer = TemplateRenderer::new().unwrap();
         let config = Config::default();
         let result = renderer.render_with_options(&config, true).unwrap();
         let output = &result.dockerfile;
 
-        assert!(output.contains("@anthropic-ai/claude-code"));
-        assert!(output.contains("npm install -g"));
+        assert!(output.contains("MiniCodeMonkey/chief/releases"));
+        assert!(output.contains("TARGETARCH"));
+        assert!(output.contains("/usr/local/bin/chief"));
     }
 
     #[test]
@@ -594,7 +573,7 @@ mod tests {
         let result = renderer.render_with_options(&config, true).unwrap();
         let output = &result.dockerfile;
 
-        let chief_pos = output.find("@anthropic-ai/claude-code").unwrap();
+        let chief_pos = output.find("MiniCodeMonkey/chief").unwrap();
         let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
         assert!(chief_pos < entrypoint_pos, "Chief layer should come before entrypoint");
     }
@@ -609,29 +588,16 @@ mod tests {
         // All layers present
         assert!(output.contains("php8.3-cli"));
         assert!(output.contains("nodesource"));
-        assert!(output.contains("@anthropic-ai/claude-code"));
+        assert!(output.contains("MiniCodeMonkey/chief"));
 
         // Correct ordering: runtimes before chief before entrypoint
         let php_pos = output.find("php8.3-cli").unwrap();
         let node_pos = output.find("nodesource").unwrap();
-        let chief_pos = output.find("@anthropic-ai/claude-code").unwrap();
+        let chief_pos = output.find("MiniCodeMonkey/chief").unwrap();
         let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
         assert!(php_pos < node_pos, "PHP before Node");
         assert!(node_pos < chief_pos, "Node before Chief");
         assert!(chief_pos < entrypoint_pos, "Chief before entrypoint");
-    }
-
-    #[test]
-    fn render_chief_installs_node_if_missing() {
-        let renderer = TemplateRenderer::new().unwrap();
-        // No Node.js runtime requested
-        let config = Config::default();
-        let result = renderer.render_with_options(&config, true).unwrap();
-        let output = &result.dockerfile;
-
-        // Chief template includes conditional Node.js installation
-        assert!(output.contains("nodesource"));
-        assert!(output.contains("@anthropic-ai/claude-code"));
     }
 
     #[test]

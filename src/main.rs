@@ -7,7 +7,6 @@ mod docker;
 mod hooks;
 mod runtime;
 mod services;
-mod shell;
 mod templates;
 
 use std::sync::Arc;
@@ -27,7 +26,6 @@ use docker::images::ImageBuilder;
 use docker::networks::{NetworkManager, default_network_name};
 use hooks::HookRunner;
 use services::{Service, collect_service_env_vars, collect_services};
-use shell::{collect_dotfile_mounts, resolve_shell};
 use templates::TemplateRenderer;
 
 /// Tracks all Docker resources that need cleanup on shutdown.
@@ -142,7 +140,7 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
     // Determine the exec command and whether Chief layer is needed
     let (exec_cmd, install_chief) = match command {
         Command::Shell => {
-            let shell = resolve_shell(config.container.shell.as_deref());
+            let shell = config.container.shell.as_deref().unwrap_or("bash");
             (format!("docker exec -it <container> {shell}"), false)
         }
         Command::Claude { args } => {
@@ -227,19 +225,11 @@ fn run_dry_run(config: &Config, command: &Command) -> Result<()> {
         "docker run -d --name {container_name} --user {uid}:{gid} -v {project_dir}:/workspace --network {network_name}"
     );
 
-    // Dotfile mounts
-    if config.shell.mount_configs {
-        for mount in collect_dotfile_mounts() {
-            docker_run.push_str(&format!(" -v {mount}"));
-        }
-    }
-
-    // Env vars (service env only — token redacted)
+    // Service env vars
     let service_envs = collect_service_env_vars(&services);
     for env in &service_envs {
         docker_run.push_str(&format!(" -e {env}"));
     }
-    docker_run.push_str(" -e CLAUDE_CODE_OAUTH_TOKEN=<token>");
 
     docker_run.push_str(&format!(" {image_tag} sleep infinity"));
     println!("{docker_run}");
@@ -381,13 +371,11 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token
-    let mut env_vars = Vec::new();
-    if let Some(token) = resolve_oauth_token()? {
-        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
-    }
+    // Resolve auth token (written to container after start, not via env)
+    let oauth_token = resolve_oauth_token()?;
 
     // Collect service env vars for the dev container
+    let mut env_vars = Vec::new();
     let project = project_name();
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
@@ -416,27 +404,25 @@ async fn run_chief(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
-    // Collect dotfile mounts if configured
-    let extra_binds = if config.shell.mount_configs {
-        collect_dotfile_mounts()
-    } else {
-        Vec::new()
-    };
-
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
-        shell: "zsh".to_string(),
+        shell: "bash".to_string(),
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
-        extra_binds,
+        extra_binds: Vec::new(),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
     // Register dev container for signal cleanup
     cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
+    // Write OAuth credentials into container (avoids exposing token in env)
+    if let Some(ref token) = oauth_token {
+        container_mgr.write_credentials(&container_id, token)?;
+    }
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -505,13 +491,11 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token
-    let mut env_vars = Vec::new();
-    if let Some(token) = resolve_oauth_token()? {
-        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
-    }
+    // Resolve auth token (written to container after start, not via env)
+    let oauth_token = resolve_oauth_token()?;
 
     // Collect service env vars for the dev container
+    let mut env_vars = Vec::new();
     let project = project_name();
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
@@ -540,27 +524,25 @@ async fn run_claude(cli: &Cli, config: &Config, args: &[String]) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
-    // Collect dotfile mounts if configured
-    let extra_binds = if config.shell.mount_configs {
-        collect_dotfile_mounts()
-    } else {
-        Vec::new()
-    };
-
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
-        shell: "zsh".to_string(),
+        shell: "bash".to_string(),
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
-        extra_binds,
+        extra_binds: Vec::new(),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
     // Register dev container for signal cleanup
     cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
+    // Write OAuth credentials into container (avoids exposing token in env)
+    if let Some(ref token) = oauth_token {
+        container_mgr.write_credentials(&container_id, token)?;
+    }
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -629,13 +611,11 @@ async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token
-    let mut env_vars = Vec::new();
-    if let Some(token) = resolve_oauth_token()? {
-        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
-    }
+    // Resolve auth token (written to container after start, not via env)
+    let oauth_token = resolve_oauth_token()?;
 
     // Collect service env vars for the dev container
+    let mut env_vars = Vec::new();
     let project = project_name();
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
@@ -664,27 +644,25 @@ async fn run_exec(cli: &Cli, config: &Config, cmd: &[String]) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
-    // Collect dotfile mounts if configured
-    let extra_binds = if config.shell.mount_configs {
-        collect_dotfile_mounts()
-    } else {
-        Vec::new()
-    };
-
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
-        shell: "zsh".to_string(),
+        shell: "bash".to_string(),
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
-        extra_binds,
+        extra_binds: Vec::new(),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
     // Register dev container for signal cleanup
     cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
+    // Write OAuth credentials into container (avoids exposing token in env)
+    if let Some(ref token) = oauth_token {
+        container_mgr.write_credentials(&container_id, token)?;
+    }
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
@@ -731,8 +709,12 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     // Detect and clean up stale containers/networks from previous sessions
     cleanup_stale_resources(&docker, &container_name).await?;
 
-    // Resolve shell (config > $SHELL > bash fallback)
-    let shell = resolve_shell(config.container.shell.as_deref());
+    // Resolve shell from config (defaults to "bash" via CLI)
+    let shell = config
+        .container
+        .shell
+        .clone()
+        .unwrap_or_else(|| "bash".to_string());
 
     // Render Dockerfile
     let renderer = TemplateRenderer::new()?;
@@ -754,13 +736,11 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         .to_string_lossy()
         .to_string();
 
-    // Resolve auth token
-    let mut env_vars = Vec::new();
-    if let Some(token) = resolve_oauth_token()? {
-        env_vars.push(format!("CLAUDE_CODE_OAUTH_TOKEN={token}"));
-    }
+    // Resolve auth token (written to container after start, not via env)
+    let oauth_token = resolve_oauth_token()?;
 
     // Collect service env vars for the dev container
+    let mut env_vars = Vec::new();
     let project = project_name();
     let services = collect_services(config, &project);
     env_vars.extend(collect_service_env_vars(&services));
@@ -789,13 +769,6 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
     // Clean up any existing dev container with the same name
     container_mgr.cleanup_existing(&container_name).await?;
 
-    // Collect dotfile mounts if configured
-    let extra_binds = if config.shell.mount_configs {
-        collect_dotfile_mounts()
-    } else {
-        Vec::new()
-    };
-
     let opts = ContainerOpts {
         image_tag: build_result.tag,
         container_name: container_name.clone(),
@@ -803,13 +776,18 @@ async fn run_shell(cli: &Cli, config: &Config) -> Result<()> {
         project_dir,
         env_vars,
         network: Some(network_name.clone()),
-        extra_binds,
+        extra_binds: Vec::new(),
     };
 
     let container_id = container_mgr.create_and_start(&opts).await?;
 
     // Register dev container for signal cleanup
     cleanup_state.lock().await.dev_container_id = Some(container_id.clone());
+
+    // Write OAuth credentials into container (avoids exposing token in env)
+    if let Some(ref token) = oauth_token {
+        container_mgr.write_credentials(&container_id, token)?;
+    }
 
     // Run post_start hooks
     let hook_runner = HookRunner::new(&container_id, &config.hooks);
