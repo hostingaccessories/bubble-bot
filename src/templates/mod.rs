@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::runtime;
 
 static BASE_TEMPLATE: &str = include_str!("base.dockerfile");
+static CHIEF_TEMPLATE: &str = include_str!("chief.dockerfile");
 static ENTRYPOINT_SCRIPT: &str = include_str!("entrypoint.sh");
 
 /// The result of rendering templates, containing the Dockerfile and any extra
@@ -56,7 +57,14 @@ impl<'a> TemplateRenderer<'a> {
 
     /// Renders the full Dockerfile by composing the base template with runtime
     /// layers discovered from the runtime registry, plus the entrypoint script.
+    /// If `install_chief` is true, includes a layer to install Claude Code (which
+    /// provides the `chief` command) via npm.
     pub fn render(&self, config: &Config) -> Result<RenderResult> {
+        self.render_with_options(config, false)
+    }
+
+    /// Renders the full Dockerfile with optional Chief installation.
+    pub fn render_with_options(&self, config: &Config, install_chief: bool) -> Result<RenderResult> {
         let tmpl = self.env.get_template("base")?;
         let mut rendered = tmpl.render(context! {})?;
 
@@ -70,6 +78,12 @@ impl<'a> TemplateRenderer<'a> {
             let layer = rt_tmpl.render(rt.template_context())?;
             rendered.push('\n');
             rendered.push_str(&layer);
+        }
+
+        // Install Chief (Claude Code npm package) when requested
+        if install_chief {
+            rendered.push('\n');
+            rendered.push_str(CHIEF_TEMPLATE);
         }
 
         // Append entrypoint instructions
@@ -549,5 +563,84 @@ mod tests {
         assert!(entrypoint.contains("${HOME}/.claude"));
         // Sets secure permissions
         assert!(entrypoint.contains("chmod 600"));
+    }
+
+    #[test]
+    fn render_without_chief_has_no_chief_layer() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render(&config).unwrap();
+        let output = &result.dockerfile;
+
+        assert!(!output.contains("@anthropic-ai/claude-code"));
+        assert!(!output.contains("chief"));
+    }
+
+    #[test]
+    fn render_with_chief_installs_claude_code() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render_with_options(&config, true).unwrap();
+        let output = &result.dockerfile;
+
+        assert!(output.contains("@anthropic-ai/claude-code"));
+        assert!(output.contains("npm install -g"));
+    }
+
+    #[test]
+    fn render_chief_layer_before_entrypoint() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+        let result = renderer.render_with_options(&config, true).unwrap();
+        let output = &result.dockerfile;
+
+        let chief_pos = output.find("@anthropic-ai/claude-code").unwrap();
+        let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
+        assert!(chief_pos < entrypoint_pos, "Chief layer should come before entrypoint");
+    }
+
+    #[test]
+    fn render_chief_with_runtimes() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = config_with_runtimes(Some("8.3"), Some("22"), false, None);
+        let result = renderer.render_with_options(&config, true).unwrap();
+        let output = &result.dockerfile;
+
+        // All layers present
+        assert!(output.contains("php8.3-cli"));
+        assert!(output.contains("nodesource"));
+        assert!(output.contains("@anthropic-ai/claude-code"));
+
+        // Correct ordering: runtimes before chief before entrypoint
+        let php_pos = output.find("php8.3-cli").unwrap();
+        let node_pos = output.find("nodesource").unwrap();
+        let chief_pos = output.find("@anthropic-ai/claude-code").unwrap();
+        let entrypoint_pos = output.find("ENTRYPOINT").unwrap();
+        assert!(php_pos < node_pos, "PHP before Node");
+        assert!(node_pos < chief_pos, "Node before Chief");
+        assert!(chief_pos < entrypoint_pos, "Chief before entrypoint");
+    }
+
+    #[test]
+    fn render_chief_installs_node_if_missing() {
+        let renderer = TemplateRenderer::new().unwrap();
+        // No Node.js runtime requested
+        let config = Config::default();
+        let result = renderer.render_with_options(&config, true).unwrap();
+        let output = &result.dockerfile;
+
+        // Chief template includes conditional Node.js installation
+        assert!(output.contains("nodesource"));
+        assert!(output.contains("@anthropic-ai/claude-code"));
+    }
+
+    #[test]
+    fn render_chief_changes_content_hash() {
+        let renderer = TemplateRenderer::new().unwrap();
+        let config = Config::default();
+
+        let without_chief = renderer.render(&config).unwrap();
+        let with_chief = renderer.render_with_options(&config, true).unwrap();
+        assert_ne!(without_chief.dockerfile, with_chief.dockerfile, "Chief layer should change the Dockerfile");
     }
 }
