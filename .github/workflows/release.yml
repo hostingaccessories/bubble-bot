@@ -85,7 +85,7 @@ jobs:
       - name: Update homebrew tap
         run: |
           gh workflow run bump-formula.yml \
-            -f formula=bubble-boy \
+            -f formula=bubble-bot \
             -f "version=${GITHUB_REF##refs/tags/}" \
             -R hostingaccessories/homebrew-brews
         env:
